@@ -16,6 +16,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
 - **Frontend**: React + Vite + TailwindCSS + shadcn/ui + wouter
+- **Browser automation**: Puppeteer + Chromium (system Nix package)
 
 ## Key Commands
 
@@ -43,7 +44,7 @@ Full-stack Polish-language recruitment participant management dashboard.
 2. **Uczestnicy** (`/uczestnicy`) — CRUD table for 8 recruitment participants
 3. **Walidacja** (`/walidacja`) — Data validation (PESEL checksum, email, phone)
 4. **Plan** (`/plan`) — Generate scheduled action plans (workers, time slots)
-5. **Symulacja** (`/symulacja`) — Screen-by-screen portal application simulation
+5. **Automatyzacja** (`/symulacja`) — Real Puppeteer browser automation against projektebon.pl
 6. **Ustawienia** (`/ustawienia`) — Schedule/portal configuration
 
 ### Database Tables
