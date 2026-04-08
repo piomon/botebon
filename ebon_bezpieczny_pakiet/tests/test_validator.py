@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from ebon_orchestrator.validator import _validate_pesel, _validate_email, _validate_phone, validate_record
+from ebon_orchestrator.validator import _validate_pesel, _validate_email, _validate_phone, _validate_password, validate_record
 
 
 def test_valid_pesel():
@@ -22,6 +22,13 @@ def test_phone():
     assert _validate_phone("+48600000001") is True
     assert _validate_phone("600000001") is True
     assert _validate_phone("123") is False
+
+
+def test_password():
+    errors = _validate_password("Diana1988@")
+    assert len(errors) == 0
+    errors = _validate_password("short")
+    assert len(errors) > 0
 
 
 def test_missing_fields():
@@ -42,6 +49,7 @@ def test_ok_record():
         "kod_pocztowy": "00-001",
         "miasto": "Warszawa",
         "login_portal": "anna@test.pl",
+        "haslo": "Diana1988@",
     }
     result = validate_record(2, record)
     assert result.ok is True
@@ -50,6 +58,7 @@ def test_ok_record():
 if __name__ == "__main__":
     test_email()
     test_phone()
+    test_password()
     test_missing_fields()
     test_ok_record()
     print("Wszystkie testy zakończone pomyślnie.")

@@ -1,4 +1,4 @@
-"""Symulacja ścieżki aplikacyjnej ekran po ekranie (bez automatycznego wysyłania)."""
+"""Symulacja ścieżki aplikacyjnej ekran po ekranie (lokalna, bez łączenia z portalem)."""
 
 from __future__ import annotations
 
@@ -24,19 +24,23 @@ SCREEN_FLOW = [
 
 
 class SimulationStep:
-    def __init__(self, screen: str, status: str, message: str, elapsed_ms: int) -> None:
+    def __init__(self, screen: str, status: str, message: str, elapsed_ms: int, fields_used: dict[str, str] | None = None) -> None:
         self.screen = screen
         self.status = status
         self.message = message
         self.elapsed_ms = elapsed_ms
+        self.fields_used = fields_used or {}
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "screen": self.screen,
             "status": self.status,
             "message": self.message,
             "elapsed_ms": self.elapsed_ms,
         }
+        if self.fields_used:
+            d["fields_used"] = self.fields_used
+        return d
 
 
 class ParticipantSimulation:
@@ -63,6 +67,12 @@ class ParticipantSimulation:
         }
 
 
+def _mask_password(password: str) -> str:
+    if len(password) <= 2:
+        return "***"
+    return password[0] + "*" * (len(password) - 2) + password[-1]
+
+
 def simulate_participant(record: dict[str, str], row: int, base_url: str) -> ParticipantSimulation:
     sim = ParticipantSimulation(
         row=row,
@@ -72,31 +82,81 @@ def simulate_participant(record: dict[str, str], row: int, base_url: str) -> Par
     )
     sim.started_at = datetime.now(tz=timezone.utc).isoformat()
 
+    haslo = record.get("haslo", "").strip()
+    imie = record.get("imie", "").strip()
+    nazwisko = record.get("nazwisko", "").strip()
+    pesel = record.get("pesel", "").strip()
+    email = record.get("email", "").strip()
+    telefon = record.get("telefon", "").strip()
+    adres = record.get("adres", "").strip()
+    kod_pocztowy = record.get("kod_pocztowy", "").strip()
+    miasto = record.get("miasto", "").strip()
+    login = record.get("login_portal", "").strip()
+
     for screen in SCREEN_FLOW:
         t0 = time.monotonic()
-        time.sleep(0.05)
+        time.sleep(0.02)
         elapsed = int((time.monotonic() - t0) * 1000)
 
-        if screen == "WYMAGANE_RECZNE_WYSLANIE":
-            sim.steps.append(SimulationStep(
-                screen=screen,
-                status="STOP",
-                message="Symulacja zakończona. Wymagane ręczne potwierdzenie i wysłanie przez uczestniczkę.",
-                elapsed_ms=elapsed,
-            ))
-            sim.final_status = "awaiting_manual_submit"
-        elif screen == "logowanie":
+        if screen == "logowanie":
             sim.steps.append(SimulationStep(
                 screen=screen,
                 status="ok",
-                message=f"Ekran logowania dostępny pod {base_url}/logowanie",
+                message=f"Logowanie: login={login}, haslo={_mask_password(haslo)}",
+                elapsed_ms=elapsed,
+                fields_used={"login": login, "haslo": _mask_password(haslo)},
+            ))
+        elif screen == "formularz_dane_osobowe":
+            sim.steps.append(SimulationStep(
+                screen=screen,
+                status="ok",
+                message=f"Wypełnianie danych: {imie} {nazwisko}, PESEL={pesel}, tel={telefon}, email={email}",
+                elapsed_ms=elapsed,
+                fields_used={
+                    "imie": imie,
+                    "nazwisko": nazwisko,
+                    "pesel": pesel,
+                    "email": email,
+                    "telefon": telefon,
+                    "adres": adres,
+                    "kod_pocztowy": kod_pocztowy,
+                    "miasto": miasto,
+                },
+            ))
+        elif screen == "formularz_dokumenty":
+            sim.steps.append(SimulationStep(
+                screen=screen,
+                status="ok",
+                message="Sekcja dokumenty — sprawdzenie gotowości załączników",
                 elapsed_ms=elapsed,
             ))
+        elif screen == "formularz_oswiadczenia":
+            sim.steps.append(SimulationStep(
+                screen=screen,
+                status="ok",
+                message="Sekcja oświadczenia — zaznaczenie wymaganych checkbox-ów",
+                elapsed_ms=elapsed,
+            ))
+        elif screen == "podglad_wniosku":
+            sim.steps.append(SimulationStep(
+                screen=screen,
+                status="ok",
+                message=f"Podgląd kompletnego wniosku dla {imie} {nazwisko}",
+                elapsed_ms=elapsed,
+            ))
+        elif screen == "WYMAGANE_RECZNE_WYSLANIE":
+            sim.steps.append(SimulationStep(
+                screen=screen,
+                status="STOP",
+                message="Symulacja zakończona. Wymagane ręczne potwierdzenie i wysłanie.",
+                elapsed_ms=elapsed,
+            ))
+            sim.final_status = "awaiting_manual_submit"
         else:
             sim.steps.append(SimulationStep(
                 screen=screen,
                 status="ok",
-                message=f"Ekran '{screen}' — symulacja przejścia OK",
+                message=f"Ekran '{screen}' — przejście OK",
                 elapsed_ms=elapsed,
             ))
 
@@ -125,12 +185,20 @@ def run_simulation(csv_path: Path, config_path: Path, out_dir: Path) -> None:
     results: list[dict[str, Any]] = []
     for record in records:
         row_num = int(record["_row"])
-        print(f"[simulate] Uczestniczka {record.get('imie','')} {record.get('nazwisko','')} (wiersz {row_num}) ...")
+        print(f"\n[simulate] === Uczestniczka: {record.get('imie','')} {record.get('nazwisko','')} (wiersz {row_num}) ===")
         sim = simulate_participant(record, row_num, base_url)
         results.append(sim.to_dict())
         for step in sim.steps:
-            icon = "✓" if step.status == "ok" else "⚑"
-            print(f"  {icon} [{step.screen}] {step.message}")
+            if step.status == "ok":
+                icon = "  \u2713"
+            elif step.status == "STOP":
+                icon = "  \u2691"
+            else:
+                icon = "  ?"
+            print(f"{icon} [{step.screen}] {step.message}")
+            if step.fields_used:
+                for k, v in step.fields_used.items():
+                    print(f"      {k}: {v}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
 

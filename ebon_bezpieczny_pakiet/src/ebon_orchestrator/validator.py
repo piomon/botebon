@@ -20,6 +20,7 @@ REQUIRED_FIELDS = [
     "kod_pocztowy",
     "miasto",
     "login_portal",
+    "haslo",
 ]
 
 
@@ -63,6 +64,21 @@ def _validate_phone(phone: str) -> bool:
     return bool(re.fullmatch(r"(\+48)?\d{9}", cleaned))
 
 
+def _validate_password(password: str) -> list[str]:
+    errors: list[str] = []
+    if len(password) < 8:
+        errors.append("Hasło za krótkie (min. 8 znaków)")
+    if not re.search(r"[A-Z]", password):
+        errors.append("Hasło nie zawiera dużej litery")
+    if not re.search(r"[a-z]", password):
+        errors.append("Hasło nie zawiera małej litery")
+    if not re.search(r"[0-9]", password):
+        errors.append("Hasło nie zawiera cyfry")
+    if not re.search(r"[^a-zA-Z0-9]", password):
+        errors.append("Hasło nie zawiera znaku specjalnego")
+    return errors
+
+
 def validate_record(row_index: int, record: dict[str, str]) -> ValidationResult:
     imie = record.get("imie", "").strip()
     nazwisko = record.get("nazwisko", "").strip()
@@ -88,6 +104,12 @@ def validate_record(row_index: int, record: dict[str, str]) -> ValidationResult:
     login = record.get("login_portal", "").strip()
     if login and not _validate_email(login):
         result.warnings.append(f"Login portalu nie wygląda jak adres e-mail: '{login}'")
+
+    haslo = record.get("haslo", "").strip()
+    if haslo:
+        pwd_errors = _validate_password(haslo)
+        for e in pwd_errors:
+            result.warnings.append(f"Hasło: {e}")
 
     if result.errors:
         result.ok = False
