@@ -1,0 +1,61 @@
+EBON — bezpieczny pakiet operacyjno-testowy
+Ta aplikacja  zawiera modułu live auto-submitu do zewnętrznej strony. 
+walidację rekordów uczestników przed naborem,
+planowanie kolejności działań na określoną godzinę,
+symulację przebiegu procesu ekran po ekranie,
+raporty JSON i CSV,
+checklisty operacyjne,
+przykłady uruchamiania z harmonogramu systemowego.
+
+ strona projektu  podaje, że:
+formularz zgłoszeniowy można wypełnić tylko w trakcie aktywnego naboru,
+Trzeba uruchomić program o konkretnej godziie  czyli 10.04.2-0
+Z tego powodu pakiet służy do przygotowania, kontroli jakości, planowania i testów, oraz do automatycznego logowania się na konta innych osób ani do masowego składania wniosków.
+`src/ebon_orchestrator/` – kod CLI do walidacji, planowania i symulacji.
+`data/participants_template.csv` – szablon rekordu uczestnika bez wrażliwych danych.
+`config/config.example.yaml` – ustawienia projektu.
+`docs/` – runbook, mapa ekranów, rejestr ryzyk, checklista go-live.
+`scheduler/` – przykłady `cron` i `systemd timer`.
+`tests/` – proste testy jednostkowe.
+`sample_output/` – przykładowe wyniki działania.
+Szybki start
+```bash
+cd ebon_bezpieczny_pakiet
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+export PYTHONPATH=src
+
+python -m ebon_orchestrator.cli validate \
+  --csv data/participants_template.csv \
+  --out sample_output/validate
+
+python -m ebon_orchestrator.cli plan \
+  --csv data/participants_template.csv \
+  --start 2026-04-10T16:00:00+02:00 \
+  --workers 3 \
+  --spacing-sec 2 \
+  --out sample_output/plan
+
+python -m ebon_orchestrator.cli simulate \
+  --csv data/participants_template.csv \
+  --config config/config.example.yaml \
+  --out sample_output/simulate
+```
+Tryby pracy
+1. `validate`
+Sprawdza kompletność danych i zgodność z podstawowymi regułami biznesowymi.
+2. `plan`
+Tworzy plan działań na wskazaną godzinę startu, rozdziela rekordy na sloty robocze i generuje harmonogram.
+3. `simulate`
+Uruchamia  symulację ścieżki:
+`logowanie -> Rekrutacja -> wybór naboru -> sekcje formularza -> walidacja -> wymagane ręczne wysłanie`.
+Symulacja łączy się z internetem i dotyka prawdziwego portalu.
+Zalecany model operacyjny
+Zbierz dane do bezpiecznego repozytorium.
+Uruchom `validate` dzień wcześniej oraz 60 minut przed startem.
+Uruchom `plan`, aby wygenerować kolejność działań i checklisty.
+Każda uczestniczka korzysta ze swojego własnego konta.
+Po złożeniu wniosku zapisuj zrzut ekranu, godzinę i status.
+
+ przechowu hasla i pełnych identyfikatorów w plikach CSV .

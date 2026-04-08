@@ -1,0 +1,10 @@
+# Przykład uruchomienia z crona (Linux/macOS)
+# Edytuj: crontab -e
+#
+# Format: minuta godzina dzień miesiąc dzień_tygodnia polecenie
+#
+# Uruchomienie walidacji o 15:00 w dniu 10 kwietnia 2026:
+0 15 10 4 * cd /ścieżka/do/ebon_bezpieczny_pakiet && /ścieżka/do/.venv/bin/python -m ebon_orchestrator.cli validate --csv data/participants_template.csv --out sample_output/validate >> logs/cron_validate.log 2>&1
+#
+# Uruchomienie planu o 15:55 w dniu 10 kwietnia 2026:
+55 15 10 4 * cd /ścieżka/do/ebon_bezpieczny_pakiet && /ścieżka/do/.venv/bin/python -m ebon_orchestrator.cli plan --csv data/participants_template.csv --start 2026-04-10T16:00:00+02:00 --workers 3 --spacing-sec 2 --out sample_output/plan >> logs/cron_plan.log 2>&1

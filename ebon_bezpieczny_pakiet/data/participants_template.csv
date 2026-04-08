@@ -1,0 +1,4 @@
+imie,nazwisko,pesel,email,telefon,adres,kod_pocztowy,miasto,login_portal,notatki
+Anna,Kowalska,90010112345,anna.kowalska@przyklad.pl,+48600000001,"ul. Przykładowa 1",00-001,Warszawa,anna.kowalska@portal.pl,uczestniczka 1
+Maria,Nowak,85020223456,maria.nowak@przyklad.pl,+48600000002,"ul. Testowa 2",30-002,Kraków,maria.nowak@portal.pl,uczestniczka 2
+Katarzyna,Wiśniewska,92030334567,k.wisniewska@przyklad.pl,+48600000003,"ul. Próbna 3",61-003,Poznań,k.wisniewska@portal.pl,uczestniczka 3
