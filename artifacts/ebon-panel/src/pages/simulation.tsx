@@ -271,7 +271,7 @@ export default function Simulation() {
               </div>
               <div className="text-sm text-muted-foreground">
                 Uruchomi automatyzacje kolejno dla {participants?.length || 0} uczestnikow.
-                Kazdy zostanie zalogowany i formularz zostanie wypelniony.
+                Kazdy zostanie zalogowany, formularz wypelniony i wniosek wyslany automatycznie.
               </div>
               <Button onClick={runAll} disabled={running} variant="outline" className="w-full">
                 {running && mode === "all" ? (
@@ -284,11 +284,11 @@ export default function Simulation() {
           </div>
 
           <div className="border-t pt-3">
-            <div className="flex items-center gap-2 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded p-3">
-              <StopCircle className="h-4 w-4 shrink-0" />
+            <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded p-3">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
               <span>
-                Automatyzacja wypelnia formularz, ale <strong>NIE wysyla wniosku</strong>.
-                Ostatni krok wymaga recznego potwierdzenia na portalu.
+                Automatyzacja wypelnia formularz i <strong>automatycznie wysyla wniosek</strong>.
+                Po zakonczeniu sprawdz zrzuty ekranu, aby potwierdzic wyslanie.
               </span>
             </div>
           </div>

@@ -94,7 +94,7 @@ const instructionSections: InstructionSection[] = [
       "  6. Przechodzi do sekcji Rekrutacja",
       "  7. Szuka NABOR 9 i otwiera formularz",
       "  8. Wypelnia formularz danymi uczestnika",
-      "  9. Automatycznie wysyla wniosek",
+      "  9. Automatycznie klika przycisk wyslania i wysyla wniosek",
       "",
       "Na kazdym etapie system robi zrzut ekranu, ktory mozesz przejrzec.",
       "",
