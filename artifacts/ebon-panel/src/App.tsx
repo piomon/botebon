@@ -1,11 +1,12 @@
+import { useState } from "react";
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import { Layout } from "./components/layout";
+import Login from "./pages/login";
 
-// Pages
 import Dashboard from "./pages/dashboard";
 import Participants from "./pages/participants";
 import Validation from "./pages/validation";
@@ -30,11 +31,24 @@ function Router() {
 }
 
 function App() {
+  const [authenticated, setAuthenticated] = useState(
+    () => sessionStorage.getItem("ebon_auth") === "1"
+  );
+
+  if (!authenticated) {
+    return (
+      <>
+        <Login onLogin={() => setAuthenticated(true)} />
+        <Toaster />
+      </>
+    );
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Layout>
+          <Layout onLogout={() => { sessionStorage.removeItem("ebon_auth"); setAuthenticated(false); }}>
             <Router />
           </Layout>
         </WouterRouter>

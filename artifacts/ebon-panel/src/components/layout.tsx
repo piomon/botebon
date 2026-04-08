@@ -11,7 +11,7 @@ const navigation = [
   { name: "Ustawienia", href: "/ustawienia", icon: Settings },
 ];
 
-export function Layout({ children }: { children: React.ReactNode }) {
+export function Layout({ children, onLogout }: { children: React.ReactNode; onLogout?: () => void }) {
   const [location] = useLocation();
 
   return (
@@ -39,6 +39,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
+            {onLogout && (
+              <SidebarGroup className="mt-auto">
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton onClick={onLogout}>
+                        <div className="flex items-center gap-3 text-destructive">
+                          <LogOut className="h-4 w-4" />
+                          <span>Wyloguj sie</span>
+                        </div>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
           </SidebarContent>
         </Sidebar>
         <main className="flex-1 flex flex-col overflow-hidden">
