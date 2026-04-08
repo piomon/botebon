@@ -1,4 +1,9 @@
 imie,nazwisko,pesel,email,telefon,adres,kod_pocztowy,miasto,login_portal,notatki
-Anna,Kowalska,90010112345,anna.kowalska@przyklad.pl,+48600000001,"ul. Przykładowa 1",00-001,Warszawa,anna.kowalska@portal.pl,uczestniczka 1
-Maria,Nowak,85020223456,maria.nowak@przyklad.pl,+48600000002,"ul. Testowa 2",30-002,Kraków,maria.nowak@portal.pl,uczestniczka 2
-Katarzyna,Wiśniewska,92030334567,k.wisniewska@przyklad.pl,+48600000003,"ul. Próbna 3",61-003,Poznań,k.wisniewska@portal.pl,uczestniczka 3
+Karolina,Czubińska,97081106024,Karolinaczubinska6@gmail.com,515316371,ul. Próchnika 23 m 35,90-708,Łódź,Karolinaczubinska6@gmail.com,
+Ania,Bizewska,71102607185,Bizewskaania080@gmail.com,511374530,ul. Przędzalniana 30 m 8/9,90-035,Łódź,Bizewskaania080@gmail.com,
+Justyna,Sztygieł,96051707300,justynaj957@gmail.com,690277201,ul. Bojowników Getta Warszawskiego 18/16,91-438,Łódź,justynaj957@gmail.com,
+Maja,Banaszkiewicz,94110813623,m.saanndra@gmail.com,514666089,ul. Limanowskiego 59/40,91-329,Łódź,m.saanndra@gmail.com,
+Aldona,Baleja,68050810943,Balejaaldona7@gmail.com,513622701,ul. Plantowa 17/24,91-104,Łódź,Balejaaldona7@gmail.com,
+Izabela,Baszczyńska,82080517863,Izabelabaszczynska38@gmail.com,666385702,ul. Powstańców Wielkopolskich 16/2,91-040,Łódź,Izabelabaszczynska38@gmail.com,
+Małgorzata,Świderek,82082709703,Gosiaswiderek46@gmail.com,609165138,ul. Główna 80/1,96-124,Maków,Gosiaswiderek46@gmail.com,
+Sandra,Baleja,88050605703,Akademiasandrabaleja@gmail.com,500592850,ul. Traktorowa 89 m 11,91-203,Łódź,Akademiasandrabaleja@gmail.com,bezrobotna zarejestrowana w UP; wykształcenie średnie; nieprowadząca działalności
