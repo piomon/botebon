@@ -105,7 +105,7 @@ const instructionSections: InstructionSection[] = [
       "ODLICZANIE DO NABORU:",
       "Na gorze strony widoczny jest zegar odliczajacy czas do otwarcia NABORU 9.",
       "  • NABOR 9 otwiera sie: 10 kwietnia 2026, godzina 16:00",
-      "  • NABOR 9 zamyka sie: 16 kwietnia 2026, godzina 16:00",
+      "  • NABOR 9 zamyka sie: 16 kwietnia 2026, godzina 17:00",
       "Mozesz uruchomic automatyzacje w dowolnym momencie, ale wniosek zostanie przyjety tylko w czasie trwania naboru.",
       "",
       "WAZNE INFORMACJE:",
@@ -349,13 +349,13 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Pulpit Operacyjny</h1>
-        <p className="text-muted-foreground">Podsumowanie stanu przygotowan i ostatnich operacji.</p>
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight">Pulpit Operacyjny</h1>
+        <p className="text-sm text-muted-foreground">Podsumowanie stanu przygotowan i ostatnich operacji.</p>
       </div>
 
       <InstructionPanel />
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Uczestnicy</CardTitle>
@@ -404,8 +404,8 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        <Card className="col-span-4">
+      <div className="grid gap-3 sm:gap-4 grid-cols-1 lg:grid-cols-7">
+        <Card className="lg:col-span-4">
           <CardHeader>
             <CardTitle>Ostatnie operacje</CardTitle>
             <CardDescription>Historia uruchomien walidacji, planowania i automatyzacji.</CardDescription>
@@ -443,7 +443,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
         
-        <Card className="col-span-3">
+        <Card className="lg:col-span-3">
           <CardHeader>
             <CardTitle>Szybkie akcje</CardTitle>
             <CardDescription>Najczesciej uzywane narzedzia koordynatora.</CardDescription>

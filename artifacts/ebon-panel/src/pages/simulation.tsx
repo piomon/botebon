@@ -34,7 +34,7 @@ interface AutomationResult {
 const NABOR_INFO = {
   name: 'NABOR 9 "Nabor z Bilansem Kompetencji i doradztwem zawodowym"',
   openDate: "2026-04-10T16:00:00+02:00",
-  closeDate: "2026-04-16T16:00:00+02:00",
+  closeDate: "2026-04-16T17:00:00+02:00",
   portal: "https://projektebon.pl",
 };
 
@@ -200,11 +200,11 @@ export default function Simulation() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Automatyzacja Portalu</h1>
-        <p className="text-muted-foreground">Prawdziwa automatyzacja przegladarki — logowanie i wypelnianie formularzy na projektebon.pl</p>
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight">Automatyzacja Portalu</h1>
+        <p className="text-sm text-muted-foreground">Automatyzacja przegladarki — logowanie i wypelnianie formularzy na projektebon.pl</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2 mb-2">
@@ -222,7 +222,7 @@ export default function Simulation() {
               <span className="font-semibold text-sm">Otwarcie naboru</span>
             </div>
             <div className="text-sm">10.04.2026, godz. 16:00</div>
-            <div className="text-xs text-muted-foreground mt-1">Zamkniecie: 16.04.2026, godz. 16:00</div>
+            <div className="text-xs text-muted-foreground mt-1">Zamkniecie: 16.04.2026, godz. 17:00</div>
           </CardContent>
         </Card>
         <Card>
@@ -239,7 +239,7 @@ export default function Simulation() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="border rounded-lg p-4 space-y-3">
               <div className="font-medium text-sm flex items-center gap-2">
                 <Zap className="h-4 w-4 text-blue-600" /> Pojedynczy uczestnik
