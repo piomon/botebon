@@ -346,170 +346,202 @@ export async function runAutomationForParticipant(
       }
     }
 
-    const naborKeywords = ["nabor 9", "nabór 9", "bilans kompetencji", "doradztwo zawodowe", "nabor_9"];
-    const allLinks = await page.$$eval("a", (els) =>
-      els.map((e) => ({ text: e.textContent?.trim().toLowerCase() || "", href: e.href }))
-    );
-    let naborLink = allLinks.find((l) =>
-      naborKeywords.some((kw) => l.text.includes(kw) || l.href.toLowerCase().includes(kw.replace(/\s/g, "")))
-    );
+    // Wait for dynamic content to load on recruitment list page
+    await delay(3000);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await delay(500);
 
-    if (!naborLink) {
-      naborLink = allLinks.find((l) => l.text.includes("nabór") || l.text.includes("nabor"));
-    }
+    // Use page.evaluate to find and click NABOR 9 — much faster than iterating elements from Node
+    const naborResult = await page.evaluate(() => {
+      const allEls = Array.from(document.querySelectorAll("a, div, li, tr, button, span"));
+      const nabor9Keywords = ["nabór 9", "nabor 9", "nabór nr 9"];
+      const availableNabory: string[] = [];
 
-    if (naborLink) {
-      await page.goto(naborLink.href, { waitUntil: "networkidle2", timeout: 30000 });
-      await delay(1000);
+      for (const el of allEls) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text.includes("rekrutacja:") && text.length < 200) {
+          availableNabory.push((el.textContent || "").trim().substring(0, 100));
+        }
+      }
+
+      // Try to find and click NABOR 9
+      for (const el of allEls) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (nabor9Keywords.some(kw => text.includes(kw)) && text.length < 300) {
+          // Try clicking a link inside it first
+          const link = el.querySelector("a");
+          const target = link || el;
+          (target as HTMLElement).click();
+          return { found: true, text: (el.textContent || "").trim().substring(0, 100), availableNabory: availableNabory.filter((v, i, a) => a.indexOf(v) === i).slice(0, 8) };
+        }
+      }
+
+      return { found: false, text: "", availableNabory: availableNabory.filter((v, i, a) => a.indexOf(v) === i).slice(0, 8) };
+    });
+
+    let naborFound = naborResult.found;
+
+    if (naborFound) {
+      await delay(3000);
       screenshot = await takeScreenshot(page);
-      addStep(log("nabor", "ok", `Przejscie do naboru: ${naborLink.href}`, screenshot));
+      addStep(log("nabor", "ok", `Znaleziono i kliknieto NABOR 9 ("${naborResult.text}"). Strona: ${page.url()}`, screenshot));
     } else {
       screenshot = await takeScreenshot(page);
-      addStep(log("nabor", "skip", "Nie znaleziono linku do Naboru 9 — kontynuacja na biezacej stronie", screenshot));
+      addStep(log(
+        "nabor",
+        "skip",
+        `NABOR 9 nie jest jeszcze dostepny na portalu. Nabor pojawi sie po otwarciu (10.04.2026 godz. 16:00). Dostepne nabory: ${naborResult.availableNabory.join(" | ")}`,
+        screenshot
+      ));
     }
 
-    const applyLinks = await page.$$eval("a, button", (els) =>
-      els.map((e) => ({
-        text: e.textContent?.trim().toLowerCase() || "",
-        tag: e.tagName,
-        href: (e as HTMLAnchorElement).href || "",
-      }))
-    );
-    const applyLink = applyLinks.find(
-      (l) =>
-        l.text.includes("zloz wniosek") ||
-        l.text.includes("złóż wniosek") ||
-        l.text.includes("aplikuj") ||
-        l.text.includes("wypelnij") ||
-        l.text.includes("wypełnij") ||
-        l.text.includes("formularz")
-    );
+    await delay(1000);
 
-    if (applyLink && applyLink.href) {
-      await page.goto(applyLink.href, { waitUntil: "networkidle2", timeout: 30000 });
-      await delay(1000);
-      screenshot = await takeScreenshot(page);
-      addStep(log("formularz_otwarcie", "ok", `Otwarto formularz: ${applyLink.href}`, screenshot));
+    // Only proceed to form if we found nabor
+    let formOpened = false;
+    if (naborFound) {
+      const applyResult = await page.evaluate(() => {
+        const applyKeywords = ["zloz wniosek", "złóż wniosek", "aplikuj", "wypelnij", "wypełnij", "formularz", "zloz", "złóż", "zapisz sie", "zapisz się", "zglos sie", "zgłoś się", "przystap", "przystąp"];
+        const buttons = Array.from(document.querySelectorAll("a, button, [role='button'], input[type='submit']"));
+        for (const el of buttons) {
+          const text = (el.textContent || "").trim().toLowerCase();
+          if (applyKeywords.some(kw => text.includes(kw))) {
+            (el as HTMLElement).click();
+            return { found: true, text: (el.textContent || "").trim().substring(0, 80) };
+          }
+        }
+        return { found: false, text: "" };
+      });
+
+      if (applyResult.found) {
+        await delay(3000);
+        formOpened = true;
+        screenshot = await takeScreenshot(page);
+        addStep(log("formularz_otwarcie", "ok", `Kliknieto: "${applyResult.text}". Strona: ${page.url()}`, screenshot));
+      } else {
+        screenshot = await takeScreenshot(page);
+        addStep(log("formularz_otwarcie", "skip", `Nie znaleziono przycisku zlozenia wniosku na stronie naboru. Strona: ${page.url()}`, screenshot));
+      }
     } else {
-      screenshot = await takeScreenshot(page);
-      addStep(log("formularz_otwarcie", "skip", "Nie znaleziono przycisku zlozenia wniosku", screenshot));
+      addStep(log("formularz_otwarcie", "skip", "Pominieto — NABOR 9 nie jest jeszcze dostepny"));
     }
 
-    const fieldMappings: Array<{ labels: string[]; value: string; fieldName: string }> = [
-      { labels: ["imię", "imie", "first_name", "firstname"], value: participant.imie, fieldName: "Imie" },
-      { labels: ["nazwisko", "last_name", "lastname", "surname"], value: participant.nazwisko, fieldName: "Nazwisko" },
-      { labels: ["pesel"], value: participant.pesel, fieldName: "PESEL" },
-      { labels: ["email", "e-mail", "adres email"], value: participant.email, fieldName: "Email" },
-      { labels: ["telefon", "phone", "numer telefonu", "tel"], value: participant.telefon, fieldName: "Telefon" },
-      { labels: ["ulica", "adres", "address", "street"], value: participant.adres, fieldName: "Adres" },
-      { labels: ["kod pocztowy", "kod_pocztowy", "postal", "zip"], value: participant.kodPocztowy, fieldName: "Kod pocztowy" },
-      { labels: ["miasto", "city", "miejscowość", "miejscowosc"], value: participant.miasto, fieldName: "Miasto" },
-    ];
+    // Fill form fields using page.evaluate for speed
+    const filledCount = await page.evaluate((p) => {
+      const fieldMappings = [
+        { labels: ["imię", "imie", "first_name", "firstname"], value: p.imie },
+        { labels: ["nazwisko", "last_name", "lastname", "surname"], value: p.nazwisko },
+        { labels: ["pesel"], value: p.pesel },
+        { labels: ["email", "e-mail", "adres email"], value: p.email },
+        { labels: ["telefon", "phone", "numer telefonu", "tel"], value: p.telefon },
+        { labels: ["ulica", "adres", "address", "street"], value: p.adres },
+        { labels: ["kod pocztowy", "kod_pocztowy", "postal", "zip"], value: p.kodPocztowy },
+        { labels: ["miasto", "city", "miejscowość", "miejscowosc"], value: p.miasto },
+      ];
 
-    let filledCount = 0;
-    for (const mapping of fieldMappings) {
-      try {
+      let count = 0;
+      const inputs = Array.from(document.querySelectorAll("input, textarea")) as HTMLInputElement[];
+
+      for (const mapping of fieldMappings) {
         let filled = false;
         for (const label of mapping.labels) {
-          const inputs = await page.$$("input, textarea");
           for (const input of inputs) {
-            const attrs = await input.evaluate((el) => ({
-              name: (el as HTMLInputElement).name?.toLowerCase() || "",
-              id: el.id?.toLowerCase() || "",
-              placeholder: (el as HTMLInputElement).placeholder?.toLowerCase() || "",
-              type: (el as HTMLInputElement).type || "",
-              ariaLabel: el.getAttribute("aria-label")?.toLowerCase() || "",
-            }));
+            if (input.type === "hidden" || input.type === "submit") continue;
+            const name = (input.name || "").toLowerCase();
+            const id = (input.id || "").toLowerCase();
+            const placeholder = (input.placeholder || "").toLowerCase();
+            const ariaLabel = (input.getAttribute("aria-label") || "").toLowerCase();
 
-            if (
-              attrs.type !== "hidden" &&
-              attrs.type !== "submit" &&
-              (attrs.name.includes(label) ||
-                attrs.id.includes(label) ||
-                attrs.placeholder.includes(label) ||
-                attrs.ariaLabel.includes(label))
-            ) {
-              await input.click({ clickCount: 3 });
-              await input.type(mapping.value, { delay: 20 });
+            if (name.includes(label) || id.includes(label) || placeholder.includes(label) || ariaLabel.includes(label)) {
+              const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+              if (nativeInputValueSetter) {
+                nativeInputValueSetter.call(input, mapping.value);
+              } else {
+                input.value = mapping.value;
+              }
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
               filled = true;
-              filledCount++;
+              count++;
               break;
             }
           }
           if (filled) break;
 
-          const labelEls = await page.$$("label");
-          for (const labelEl of labelEls) {
-            const text = await labelEl.evaluate((el) => el.textContent?.toLowerCase() || "");
-            if (text.includes(label)) {
-              const forId = await labelEl.evaluate((el) => el.getAttribute("for"));
-              if (forId) {
-                const target = await page.$(`#${forId}`);
-                if (target) {
-                  await target.click({ clickCount: 3 });
-                  await target.type(mapping.value, { delay: 20 });
-                  filled = true;
-                  filledCount++;
-                  break;
+          // Try via labels
+          if (!filled) {
+            const labels = Array.from(document.querySelectorAll("label"));
+            for (const lbl of labels) {
+              if ((lbl.textContent || "").toLowerCase().includes(label)) {
+                const forId = lbl.getAttribute("for");
+                if (forId) {
+                  const target = document.getElementById(forId) as HTMLInputElement;
+                  if (target) {
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                    if (setter) setter.call(target, mapping.value);
+                    else target.value = mapping.value;
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                    target.dispatchEvent(new Event('change', { bubbles: true }));
+                    filled = true;
+                    count++;
+                    break;
+                  }
                 }
               }
             }
           }
           if (filled) break;
         }
-      } catch {}
-    }
+      }
+      return count;
+    }, {
+      imie: participant.imie,
+      nazwisko: participant.nazwisko,
+      pesel: participant.pesel,
+      email: participant.email,
+      telefon: participant.telefon,
+      adres: participant.adres,
+      kodPocztowy: participant.kodPocztowy,
+      miasto: participant.miasto,
+    });
 
+    await delay(500);
     screenshot = await takeScreenshot(page);
     addStep(
       log(
         "formularz_wypelnienie",
         filledCount > 0 ? "ok" : "skip",
-        `Wypelniono ${filledCount} z ${fieldMappings.length} pol formularza`,
+        `Wypelniono ${filledCount} z 8 pol formularza`,
         screenshot
       )
     );
 
     if (autoSubmit) {
-      // Try to find and click the submit button
-      let submitClicked = false;
-      const submitKeywords = ["wyslij", "wyślij", "zatwierdz", "zatwierdź", "zapisz", "submit", "zloz wniosek", "złóż wniosek", "aplikuj", "wyslij wniosek"];
-      
-      try {
-        const allButtons = await page.$$("button, input[type='submit'], a.btn, a.button");
-        for (const btn of allButtons) {
-          const text = await btn.evaluate((el) => el.textContent?.trim().toLowerCase() || "");
-          const type = await btn.evaluate((el) => (el as HTMLInputElement).type || "");
-          const value = await btn.evaluate((el) => (el as HTMLInputElement).value?.toLowerCase() || "");
-          
-          if (
-            submitKeywords.some((kw) => text.includes(kw) || value.includes(kw)) ||
-            type === "submit"
-          ) {
-            await waitForNav(page, async () => { await btn.click(); });
-            submitClicked = true;
-            break;
+      // Use page.evaluate for faster submit button detection
+      const submitResult = await page.evaluate(() => {
+        const submitKeywords = ["wyslij", "wyślij", "zatwierdz", "zatwierdź", "zapisz", "submit", "zloz wniosek", "złóż wniosek", "aplikuj", "wyslij wniosek"];
+        const buttons = Array.from(document.querySelectorAll("button, input[type='submit'], a.btn, a.button"));
+        for (const btn of buttons) {
+          const text = (btn.textContent || "").trim().toLowerCase();
+          const type = (btn as HTMLInputElement).type || "";
+          const value = ((btn as HTMLInputElement).value || "").toLowerCase();
+          if (submitKeywords.some(kw => text.includes(kw) || value.includes(kw)) || type === "submit") {
+            (btn as HTMLElement).click();
+            return { clicked: true, text: (btn.textContent || "").trim().substring(0, 60) };
           }
         }
-      } catch {}
+        return { clicked: false, text: "" };
+      });
 
-      if (!submitClicked) {
-        // Try pressing Enter as fallback
-        try {
-          await waitForNav(page, async () => { await page.keyboard.press("Enter"); });
-          submitClicked = true;
-        } catch {}
-      }
-
-      await delay(2000);
+      await delay(3000);
       screenshot = await takeScreenshot(page);
 
-      if (submitClicked) {
+      if (submitResult.clicked) {
         addStep(
           log(
             "wyslanie_wniosku",
             "ok",
-            `Wniosek zostal wyslany automatycznie. Strona po wyslaniu: ${page.url()}`,
+            `Kliknieto przycisk wyslania ("${submitResult.text}"). Strona po wyslaniu: ${page.url()}`,
             screenshot
           )
         );
@@ -519,7 +551,7 @@ export async function runAutomationForParticipant(
           log(
             "wyslanie_wniosku",
             "skip",
-            "Nie znaleziono przycisku wyslania — moze wymagac recznego potwierdzenia",
+            `Nie znaleziono przycisku wyslania wniosku. Strona: ${page.url()}`,
             screenshot
           )
         );
