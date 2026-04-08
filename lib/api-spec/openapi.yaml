@@ -3,20 +3,25 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: EBON API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: participants
+    description: Participant management
+  - name: operations
+    description: Validate, plan, simulate
+  - name: dashboard
+    description: Dashboard summaries
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +29,221 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /participants:
+    get:
+      operationId: listParticipants
+      tags: [participants]
+      summary: List all participants
+      responses:
+        "200":
+          description: List of participants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Participant"
+    post:
+      operationId: createParticipant
+      tags: [participants]
+      summary: Add a new participant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateParticipantBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /participants/{id}:
+    get:
+      operationId: getParticipant
+      tags: [participants]
+      summary: Get a participant by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Participant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateParticipant
+      tags: [participants]
+      summary: Update a participant
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateParticipantBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Participant"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteParticipant
+      tags: [participants]
+      summary: Delete a participant
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /operations/validate:
+    post:
+      operationId: runValidation
+      tags: [operations]
+      summary: Validate all participants
+      responses:
+        "200":
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationReport"
+
+  /operations/plan:
+    post:
+      operationId: runPlan
+      tags: [operations]
+      summary: Generate action plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanRequest"
+      responses:
+        "200":
+          description: Plan results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanReport"
+
+  /operations/simulate:
+    post:
+      operationId: runSimulation
+      tags: [operations]
+      summary: Simulate the application flow
+      responses:
+        "200":
+          description: Simulation results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulationReport"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Dashboard summary with counts and status
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /operations/history:
+    get:
+      operationId: listOperationHistory
+      tags: [operations]
+      summary: Recent operation history
+      responses:
+        "200":
+          description: Operation history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OperationRecord"
+
+  /settings/schedule:
+    get:
+      operationId: getSchedule
+      tags: [operations]
+      summary: Get current schedule settings
+      responses:
+        "200":
+          description: Schedule settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleSettings"
+    put:
+      operationId: updateSchedule
+      tags: [operations]
+      summary: Update schedule settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleSettings"
+      responses:
+        "200":
+          description: Updated schedule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleSettings"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +254,352 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    Participant:
+      type: object
+      properties:
+        id:
+          type: integer
+        imie:
+          type: string
+        nazwisko:
+          type: string
+        pesel:
+          type: string
+        email:
+          type: string
+        telefon:
+          type: string
+        adres:
+          type: string
+        kodPocztowy:
+          type: string
+        miasto:
+          type: string
+        loginPortal:
+          type: string
+        haslo:
+          type: string
+        notatki:
+          type: ["string", "null"]
+        validationStatus:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - imie
+        - nazwisko
+        - pesel
+        - email
+        - telefon
+        - adres
+        - kodPocztowy
+        - miasto
+        - loginPortal
+        - haslo
+        - createdAt
+
+    CreateParticipantBody:
+      type: object
+      properties:
+        imie:
+          type: string
+        nazwisko:
+          type: string
+        pesel:
+          type: string
+        email:
+          type: string
+        telefon:
+          type: string
+        adres:
+          type: string
+        kodPocztowy:
+          type: string
+        miasto:
+          type: string
+        loginPortal:
+          type: string
+        haslo:
+          type: string
+        notatki:
+          type: ["string", "null"]
+      required:
+        - imie
+        - nazwisko
+        - pesel
+        - email
+        - telefon
+        - adres
+        - kodPocztowy
+        - miasto
+        - loginPortal
+        - haslo
+
+    UpdateParticipantBody:
+      type: object
+      properties:
+        imie:
+          type: string
+        nazwisko:
+          type: string
+        pesel:
+          type: string
+        email:
+          type: string
+        telefon:
+          type: string
+        adres:
+          type: string
+        kodPocztowy:
+          type: string
+        miasto:
+          type: string
+        loginPortal:
+          type: string
+        haslo:
+          type: string
+        notatki:
+          type: ["string", "null"]
+
+    ValidationRecord:
+      type: object
+      properties:
+        participantId:
+          type: integer
+        imie:
+          type: string
+        nazwisko:
+          type: string
+        ok:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - participantId
+        - imie
+        - nazwisko
+        - ok
+        - errors
+        - warnings
+
+    ValidationReport:
+      type: object
+      properties:
+        total:
+          type: integer
+        ok:
+          type: integer
+        errorsCount:
+          type: integer
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationRecord"
+      required:
+        - total
+        - ok
+        - errorsCount
+        - records
+
+    PlanRequest:
+      type: object
+      properties:
+        startTime:
+          type: string
+          format: date-time
+        workers:
+          type: integer
+        spacingSec:
+          type: integer
+      required:
+        - startTime
+        - workers
+        - spacingSec
+
+    PlanSlot:
+      type: object
+      properties:
+        slotId:
+          type: integer
+        worker:
+          type: integer
+        participantId:
+          type: integer
+        imie:
+          type: string
+        nazwisko:
+          type: string
+        loginPortal:
+          type: string
+        scheduledAt:
+          type: string
+          format: date-time
+      required:
+        - slotId
+        - worker
+        - participantId
+        - imie
+        - nazwisko
+        - loginPortal
+        - scheduledAt
+
+    PlanReport:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        totalSlots:
+          type: integer
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanSlot"
+      required:
+        - generatedAt
+        - totalSlots
+        - slots
+
+    SimulationStep:
+      type: object
+      properties:
+        screen:
+          type: string
+        status:
+          type: string
+        message:
+          type: string
+        fieldsUsed:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - screen
+        - status
+        - message
+
+    ParticipantSimulation:
+      type: object
+      properties:
+        participantId:
+          type: integer
+        imie:
+          type: string
+        nazwisko:
+          type: string
+        loginPortal:
+          type: string
+        finalStatus:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimulationStep"
+      required:
+        - participantId
+        - imie
+        - nazwisko
+        - loginPortal
+        - finalStatus
+        - steps
+
+    SimulationReport:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        total:
+          type: integer
+        simulations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ParticipantSimulation"
+      required:
+        - generatedAt
+        - total
+        - simulations
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalParticipants:
+          type: integer
+        validatedOk:
+          type: integer
+        validatedErrors:
+          type: integer
+        notValidated:
+          type: integer
+        lastValidation:
+          type: ["string", "null"]
+          format: date-time
+        lastSimulation:
+          type: ["string", "null"]
+          format: date-time
+        scheduleSet:
+          type: boolean
+        scheduledStart:
+          type: ["string", "null"]
+          format: date-time
+      required:
+        - totalParticipants
+        - validatedOk
+        - validatedErrors
+        - notValidated
+        - scheduleSet
+
+    OperationRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        operationType:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - operationType
+        - status
+        - summary
+        - createdAt
+
+    ScheduleSettings:
+      type: object
+      properties:
+        startTime:
+          type: string
+          format: date-time
+        workers:
+          type: integer
+        spacingSec:
+          type: integer
+        portalUrl:
+          type: string
+      required:
+        - startTime
+        - workers
+        - spacingSec
+        - portalUrl
