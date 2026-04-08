@@ -77,7 +77,7 @@ async function waitForNav(page: Page, action: () => Promise<void>, timeout = 300
 export async function runAutomationForParticipant(
   participant: ParticipantData,
   onProgress?: ProgressCallback,
-  stopBeforeSend = true
+  autoSubmit = true
 ): Promise<AutomationResult> {
   const steps: StepLog[] = [];
   const startedAt = new Date().toISOString();
@@ -470,13 +470,68 @@ export async function runAutomationForParticipant(
       )
     );
 
-    if (stopBeforeSend) {
+    if (autoSubmit) {
+      // Try to find and click the submit button
+      let submitClicked = false;
+      const submitKeywords = ["wyslij", "wyślij", "zatwierdz", "zatwierdź", "zapisz", "submit", "zloz wniosek", "złóż wniosek", "aplikuj", "wyslij wniosek"];
+      
+      try {
+        const allButtons = await page.$$("button, input[type='submit'], a.btn, a.button");
+        for (const btn of allButtons) {
+          const text = await btn.evaluate((el) => el.textContent?.trim().toLowerCase() || "");
+          const type = await btn.evaluate((el) => (el as HTMLInputElement).type || "");
+          const value = await btn.evaluate((el) => (el as HTMLInputElement).value?.toLowerCase() || "");
+          
+          if (
+            submitKeywords.some((kw) => text.includes(kw) || value.includes(kw)) ||
+            type === "submit"
+          ) {
+            await waitForNav(page, async () => { await btn.click(); });
+            submitClicked = true;
+            break;
+          }
+        }
+      } catch {}
+
+      if (!submitClicked) {
+        // Try pressing Enter as fallback
+        try {
+          await waitForNav(page, async () => { await page.keyboard.press("Enter"); });
+          submitClicked = true;
+        } catch {}
+      }
+
+      await delay(2000);
+      screenshot = await takeScreenshot(page);
+
+      if (submitClicked) {
+        addStep(
+          log(
+            "wyslanie_wniosku",
+            "ok",
+            `Wniosek zostal wyslany automatycznie. Strona po wyslaniu: ${page.url()}`,
+            screenshot
+          )
+        );
+        status = "completed";
+      } else {
+        addStep(
+          log(
+            "wyslanie_wniosku",
+            "skip",
+            "Nie znaleziono przycisku wyslania — moze wymagac recznego potwierdzenia",
+            screenshot
+          )
+        );
+        status = "stopped";
+      }
+    } else {
       screenshot = await takeScreenshot(page);
       addStep(
         log(
           "stop_przed_wyslaniem",
           "stop",
-          "STOP — Formularz wypelniony. Wymagane reczne potwierdzenie i wyslanie wniosku. Automatyczne wyslanie jest zablokowane.",
+          "Formularz wypelniony. Automatyczne wyslanie jest wylaczone.",
           screenshot
         )
       );
@@ -514,7 +569,7 @@ export async function runAutomationForAll(
 
   for (let i = 0; i < participants.length; i++) {
     const p = participants[i];
-    const result = await runAutomationForParticipant(p, onProgress, true);
+    const result = await runAutomationForParticipant(p, onProgress);
     results.push(result);
 
     if (i < participants.length - 1) {
