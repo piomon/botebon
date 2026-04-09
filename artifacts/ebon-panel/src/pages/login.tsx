@@ -9,7 +9,7 @@ interface LoginProps {
 }
 
 const ADMIN_EMAIL = "balejasandra@gmail.com";
-const ADMIN_PASSWORD = "Diana1988@";
+const ADMIN_PASSWORD = "OlaDiana1969@";
 
 export default function Login({ onLogin }: LoginProps) {
   const [email, setEmail] = useState("");
