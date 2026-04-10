@@ -115,6 +115,48 @@ const SEED_DATA = [
     notatki: "bezrobotna zarejestrowana w UP; wykształcenie średnie; nieprowadząca działalności",
     validationStatus: "ok" as const,
   },
+  {
+    imie: "Dominika",
+    nazwisko: "Grabarczyk",
+    pesel: "91110612580",
+    email: "dominikaaa9191@gmail.com",
+    telefon: "573129969",
+    adres: "ul. Sierpowa 16 m 1",
+    kodPocztowy: "91-202",
+    miasto: "Łódź",
+    loginPortal: "dominikaaa9191@gmail.com",
+    haslo: "Qwerty123!!!",
+    notatki: "wykształcenie zawodowe; zarejestrowana w PUP; nieprowadząca działalności",
+    validationStatus: "ok" as const,
+  },
+  {
+    imie: "Dagmara",
+    nazwisko: "Sobiegraj",
+    pesel: "92071813560",
+    email: "Monika.sobiegraj92@interia.pl",
+    telefon: "796460198",
+    adres: "ul. Łagiewnicka 336 m 6",
+    kodPocztowy: "91-509",
+    miasto: "Łódź",
+    loginPortal: "Monika.sobiegraj92@interia.pl",
+    haslo: "Qwerty123!!!",
+    notatki: "wykształcenie średnie niepełne; zarejestrowana w PUP; nieprowadząca działalności",
+    validationStatus: "ok" as const,
+  },
+  {
+    imie: "Ewelina",
+    nazwisko: "Wiśniewska",
+    pesel: "01310801127",
+    email: "Ewelina.wisniewska99@interia.pl",
+    telefon: "531292572",
+    adres: "ul. Walerego Przyborowskiego 3/25",
+    kodPocztowy: "93-162",
+    miasto: "Łódź",
+    loginPortal: "Ewelina.wisniewska99@interia.pl",
+    haslo: "Qwerty123!!!",
+    notatki: "wykształcenie średnie; zarejestrowana w PUP; nieprowadząca działalności",
+    validationStatus: "ok" as const,
+  },
 ];
 
 export async function seedParticipants() {
@@ -125,11 +167,11 @@ export async function seedParticipants() {
       return;
     }
 
-    logger.info("Seeding 8 participants...");
+    logger.info("Seeding 11 participants...");
     for (const p of SEED_DATA) {
       await db.insert(participantsTable).values(p);
     }
-    logger.info("Seed complete: 8 participants inserted");
+    logger.info("Seed complete: 11 participants inserted");
   } catch (err) {
     logger.error({ err }, "Seed failed");
   }
