@@ -492,22 +492,26 @@ export async function runAutomationForParticipant(
     }
 
     // Helper function to fill all visible fields on the current page
+    // Strategy: fill known fields with real data, fill ALL other required empty fields with defaults
     async function fillCurrentPageFields() {
       const result = await page.evaluate((p) => {
-        function setInputValue(input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string) {
+        function setVal(input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string) {
           if (input.tagName === 'SELECT') {
             const select = input as HTMLSelectElement;
-            const options = Array.from(select.options);
+            const options = Array.from(select.options).filter(o => o.value && o.value !== "" && !o.disabled);
+            // Try to match by text
             const match = options.find(o =>
               o.text.toLowerCase().includes(value.toLowerCase()) ||
               o.value.toLowerCase().includes(value.toLowerCase())
             );
             if (match) {
               select.value = match.value;
-              select.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
+            } else if (options.length > 0) {
+              // Pick first non-empty option as default
+              select.value = options[0].value;
             }
-            return false;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
           }
           const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
           if (nativeSetter) nativeSetter.call(input, value);
@@ -527,11 +531,11 @@ export async function runAutomationForParticipant(
           }
           const parentLabel = input.closest("label");
           if (parentLabel) labelText += " " + (parentLabel.textContent || "").toLowerCase();
-          // Check previous sibling or parent for label-like text
           const parent = input.parentElement;
           if (parent) {
             const prev = parent.previousElementSibling;
             if (prev) labelText += " " + (prev.textContent || "").toLowerCase();
+            labelText += " " + (parent.textContent || "").toLowerCase().substring(0, 200);
           }
           labelText += " " + (input.getAttribute("name") || "").toLowerCase();
           labelText += " " + (input.getAttribute("id") || "").toLowerCase();
@@ -540,39 +544,51 @@ export async function runAutomationForParticipant(
           return labelText;
         }
 
-        const fieldMappings = [
-          { match: ["imię", "imie"], value: p.imie, type: "text" },
-          { match: ["nazwisko"], value: p.nazwisko, type: "text" },
-          { match: ["numer pesel", "pesel"], value: p.pesel, type: "text" },
-          { match: ["e-mail", "email", "adres e-mail"], value: p.email, type: "text" },
-          { match: ["numer telefonu", "telefon", "phone"], value: p.telefon, type: "text" },
-          { match: ["ulica", "adres", "street"], value: p.adres, type: "text" },
-          { match: ["kod pocztowy", "kod_pocztowy", "postal"], value: p.kodPocztowy, type: "text" },
-          { match: ["miasto", "miejscowość", "miejscowosc"], value: p.miasto, type: "text" },
-          { match: ["obywatelstwo"], value: "polskie", type: "select" },
-          { match: ["płeć", "plec"], value: p.sex, type: "select" },
-          { match: ["data urodzenia", "data_urodzenia"], value: p.birthDate, type: "date" },
+        // Known field mappings with real participant data
+        const fieldMappings: { match: string[]; value: string }[] = [
+          { match: ["imię", "imie", "first_name"], value: p.imie },
+          { match: ["nazwisko", "last_name", "surname"], value: p.nazwisko },
+          { match: ["pesel"], value: p.pesel },
+          { match: ["e-mail", "email"], value: p.email },
+          { match: ["numer telefonu", "telefon", "phone", "tel"], value: p.telefon },
+          { match: ["ulica", "adres zamieszkania", "street"], value: p.adres },
+          { match: ["kod pocztowy", "postal", "zip"], value: p.kodPocztowy },
+          { match: ["miasto", "miejscowość", "miejscowosc", "city"], value: p.miasto },
+          { match: ["obywatelstwo"], value: "polskie" },
+          { match: ["płeć", "plec", "sex"], value: p.sex },
+          { match: ["data urodzenia", "data_urodzenia", "birth"], value: p.birthDate },
+          { match: ["województwo", "wojewodztwo"], value: "łódzkie" },
+          { match: ["powiat"], value: "łódzki" },
+          { match: ["gmina"], value: "Łódź" },
+          { match: ["nr domu", "numer domu", "nr budynku"], value: "1" },
+          { match: ["nr lokalu", "numer lokalu", "nr mieszkania"], value: "1" },
+          { match: ["poczta"], value: p.miasto },
+          { match: ["kraj"], value: "Polska" },
         ];
 
-        const allInputs = Array.from(document.querySelectorAll("input, textarea, select")) as (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement)[];
         let filled = 0;
         const filledFields: string[] = [];
 
+        // Step 1: Fill known fields
+        const allInputs = Array.from(document.querySelectorAll("input, textarea, select")) as (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement)[];
+        const handledInputs = new Set<HTMLElement>();
+
         for (const input of allInputs) {
-          if ((input as HTMLInputElement).type === 'hidden' || (input as HTMLInputElement).type === 'submit') continue;
-          if (!(input as HTMLElement).offsetParent && (input as HTMLInputElement).type !== 'date') continue;
+          const inputEl = input as HTMLInputElement;
+          if (inputEl.type === 'hidden' || inputEl.type === 'submit' || inputEl.type === 'button') continue;
 
           const labelText = getLabelText(input as HTMLElement);
+          let matched = false;
 
           for (const mapping of fieldMappings) {
             if (mapping.match.some(m => labelText.includes(m))) {
-              // Skip if already filled
+              matched = true;
+              handledInputs.add(input as HTMLElement);
               if (input.value && input.value.trim().length > 0 && input.tagName !== 'SELECT') {
                 filled++;
-                filledFields.push(`${mapping.match[0]}(existing)`);
-                break;
-              }
-              if (setInputValue(input as HTMLInputElement, mapping.value)) {
+                filledFields.push(`${mapping.match[0]}(ok)`);
+              } else {
+                setVal(input as HTMLInputElement, mapping.value);
                 filled++;
                 filledFields.push(mapping.match[0]);
               }
@@ -581,16 +597,79 @@ export async function runAutomationForParticipant(
           }
         }
 
-        // Handle checkbox "Mam prawo pobytu"
+        // Step 2: Check ALL remaining checkboxes - check them all
         const checkboxes = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
         for (const cb of checkboxes) {
-          const labelText = getLabelText(cb);
-          if (labelText.includes("prawo pobytu") || labelText.includes("obywatelstwo") || labelText.includes("rzeczypospolitej")) {
-            if (!cb.checked) {
-              cb.click();
+          if (!cb.checked) {
+            cb.click();
+            filled++;
+            const lbl = getLabelText(cb).trim().substring(0, 30);
+            filledFields.push(`cb:${lbl || "unknown"}`);
+          }
+          handledInputs.add(cb);
+        }
+
+        // Step 3: For ALL remaining empty required fields — fill with defaults
+        for (const input of allInputs) {
+          if (handledInputs.has(input as HTMLElement)) continue;
+          const inputEl = input as HTMLInputElement;
+          if (inputEl.type === 'hidden' || inputEl.type === 'submit' || inputEl.type === 'button' || inputEl.type === 'checkbox' || inputEl.type === 'radio') continue;
+          if (inputEl.readOnly || inputEl.disabled) continue;
+
+          // Skip if already has value
+          if (input.value && input.value.trim().length > 0 && input.tagName !== 'SELECT') continue;
+
+          const labelText = getLabelText(input as HTMLElement);
+
+          if (input.tagName === 'SELECT') {
+            const select = input as HTMLSelectElement;
+            if (select.value && select.value !== "") continue;
+            const options = Array.from(select.options).filter(o => o.value && o.value !== "" && !o.disabled);
+            if (options.length > 0) {
+              select.value = options[0].value;
+              select.dispatchEvent(new Event('change', { bubbles: true }));
               filled++;
-              filledFields.push("prawo_pobytu");
+              filledFields.push(`sel:${labelText.trim().substring(0, 20) || "unknown"}`);
             }
+            continue;
+          }
+
+          if (inputEl.type === 'date') {
+            setVal(inputEl, p.birthDate);
+            filled++;
+            filledFields.push(`date:${labelText.trim().substring(0, 20) || "unknown"}`);
+            continue;
+          }
+
+          if (inputEl.type === 'number') {
+            setVal(inputEl, "1");
+            filled++;
+            filledFields.push(`num:${labelText.trim().substring(0, 20) || "unknown"}`);
+            continue;
+          }
+
+          // Default text: use "x" or "brak" for unknown text fields
+          setVal(inputEl, "brak");
+          filled++;
+          filledFields.push(`txt:${labelText.trim().substring(0, 20) || "unknown"}`);
+        }
+
+        // Step 4: Handle radio buttons - select first option in each group
+        const radioGroups = new Set<string>();
+        const radios = Array.from(document.querySelectorAll("input[type='radio']")) as HTMLInputElement[];
+        for (const radio of radios) {
+          const name = radio.name;
+          if (radioGroups.has(name)) continue;
+          // Check if any in this group is already checked
+          const group = Array.from(document.querySelectorAll(`input[type='radio'][name='${name}']`)) as HTMLInputElement[];
+          const anyChecked = group.some(r => r.checked);
+          if (!anyChecked && group.length > 0) {
+            group[0].click();
+            radioGroups.add(name);
+            filled++;
+            filledFields.push(`radio:${name}`);
+          } else {
+            radioGroups.add(name);
           }
         }
 
@@ -683,55 +762,112 @@ export async function runAutomationForParticipant(
     );
 
     if (autoSubmit) {
-      // Click "Wyślij zgłoszenie" button
-      const submitResult = await page.evaluate(() => {
-        const submitKeywords = ["wyślij zgłoszenie", "wyslij zgloszenie", "wyślij", "wyslij", "submit", "złóż", "zloz", "zatwierdź", "zatwierdz"];
-        const buttons = Array.from(document.querySelectorAll("a, button, input[type='submit'], [role='button']"));
-        for (const btn of buttons) {
-          const text = (btn.textContent || "").trim().toLowerCase();
-          if (submitKeywords.some(kw => text.includes(kw))) {
-            (btn as HTMLElement).click();
-            return { clicked: true, text: (btn.textContent || "").trim().substring(0, 60) };
+      // After filling form pages, need to go back to the overview/summary page
+      // The overview page URL pattern: /efz/efz/formone/XXXX/9 (without page number)
+      // or we need to click "back" / arrow / navigate to the summary
+
+      // Try clicking back arrow or going to overview
+      const backResult = await page.evaluate(() => {
+        // Try back arrow link
+        const backLinks = Array.from(document.querySelectorAll("a, button"));
+        for (const link of backLinks) {
+          const text = (link.textContent || "").trim().toLowerCase();
+          const href = (link as HTMLAnchorElement).href || "";
+          if (text.includes("wróć") || text.includes("wroc") || text.includes("powrót") || text.includes("powrot") ||
+              text.includes("podsumowanie") || text.includes("summary") ||
+              text === "←" || text === "⬅" || text.includes("back")) {
+            (link as HTMLElement).click();
+            return { found: true, text: (link.textContent || "").trim().substring(0, 40) };
           }
         }
-        return { clicked: false, text: "" };
+        return { found: false, text: "" };
       });
 
-      await delay(3000);
+      if (backResult.found) {
+        await delay(2000);
+        addStep(log("powrot_do_podsumowania", "ok", `Kliknieto: "${backResult.text}"`));
+      } else {
+        // Navigate back using browser history or go to the nabór page
+        try {
+          await page.goBack();
+          await delay(2000);
+          addStep(log("powrot_do_podsumowania", "ok", "Uzyto page.goBack()"));
+        } catch {}
+      }
 
-      if (submitResult.clicked) {
-        // Check for confirmation dialog/popup and confirm if needed
-        const confirmResult = await page.evaluate(() => {
-          const confirmKeywords = ["tak", "potwierdz", "potwierdzam", "yes", "ok", "wyślij", "wyslij"];
-          const buttons = Array.from(document.querySelectorAll("button, a, [role='button']"));
+      // Try to find and click "Wyślij zgłoszenie" - try multiple times with navigation
+      let submitClicked = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const submitResult = await page.evaluate(() => {
+          const submitKeywords = ["wyślij zgłoszenie", "wyslij zgloszenie"];
+          const buttons = Array.from(document.querySelectorAll("a, button, input[type='submit'], [role='button']"));
           for (const btn of buttons) {
             const text = (btn.textContent || "").trim().toLowerCase();
-            if (confirmKeywords.some(kw => text === kw || text.includes(kw))) {
+            if (submitKeywords.some(kw => text.includes(kw))) {
               (btn as HTMLElement).click();
-              return { confirmed: true, text: (btn.textContent || "").trim().substring(0, 40) };
+              return { clicked: true, text: (btn.textContent || "").trim().substring(0, 60) };
             }
           }
-          return { confirmed: false, text: "" };
+          // Also try by icon/class - the button has a green icon
+          for (const btn of buttons) {
+            const text = (btn.textContent || "").trim().toLowerCase();
+            if (text.includes("wyślij") || text.includes("wyslij")) {
+              (btn as HTMLElement).click();
+              return { clicked: true, text: (btn.textContent || "").trim().substring(0, 60) };
+            }
+          }
+          return { clicked: false, text: "" };
         });
 
-        await delay(2000);
-        screenshot = await takeScreenshot(page);
-        addStep(
-          log(
-            "wyslanie_wniosku",
-            "ok",
-            `Kliknieto: "${submitResult.text}"${confirmResult.confirmed ? ` + potwierdzono: "${confirmResult.text}"` : ""}. Strona: ${page.url()}`,
-            screenshot
-          )
-        );
-        status = "completed";
-      } else {
+        if (submitResult.clicked) {
+          submitClicked = true;
+          await delay(3000);
+
+          // Check for confirmation dialog/popup and confirm if needed
+          const confirmResult = await page.evaluate(() => {
+            const confirmKeywords = ["tak", "potwierdz", "potwierdzam", "yes", "ok", "wyślij", "wyslij", "zatwierdz", "zatwierdź"];
+            const buttons = Array.from(document.querySelectorAll("button, a, [role='button']"));
+            for (const btn of buttons) {
+              const text = (btn.textContent || "").trim().toLowerCase();
+              if (confirmKeywords.some(kw => text === kw || text.includes(kw))) {
+                (btn as HTMLElement).click();
+                return { confirmed: true, text: (btn.textContent || "").trim().substring(0, 40) };
+              }
+            }
+            return { confirmed: false, text: "" };
+          });
+
+          await delay(2000);
+          screenshot = await takeScreenshot(page);
+          addStep(
+            log(
+              "wyslanie_wniosku",
+              "ok",
+              `Kliknieto: "${submitResult.text}"${confirmResult.confirmed ? ` + potwierdzono: "${confirmResult.text}"` : ""}. Strona: ${page.url()}`,
+              screenshot
+            )
+          );
+          status = "completed";
+          break;
+        } else {
+          // Try going back more
+          if (attempt < 3) {
+            try {
+              await page.goBack();
+              await delay(2000);
+              addStep(log("powrot_proba", "ok", `Proba ${attempt}: goBack(). URL: ${page.url()}`));
+            } catch {}
+          }
+        }
+      }
+
+      if (!submitClicked) {
         screenshot = await takeScreenshot(page);
         addStep(
           log(
             "wyslanie_wniosku",
             "skip",
-            `Nie znaleziono przycisku "Wyslij zgloszenie". Strona: ${page.url()}`,
+            `Nie znaleziono przycisku "Wyslij zgloszenie" po 3 probach. Strona: ${page.url()}`,
             screenshot
           )
         );
