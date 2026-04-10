@@ -446,7 +446,7 @@ export async function runAutomationForParticipant(
     let formOpened = false;
     if (naborFound) {
       const applyResult = await page.evaluate(() => {
-        const applyKeywords = ["zloz wniosek", "złóż wniosek", "aplikuj", "wypelnij", "wypełnij", "formularz", "zloz", "złóż", "zapisz sie", "zapisz się", "zglos sie", "zgłoś się", "przystap", "przystąp"];
+        const applyKeywords = ["weź udział w naborze", "wez udzial w naborze", "weź udział", "wez udzial", "zloz wniosek", "złóż wniosek", "aplikuj", "wypelnij", "wypełnij", "formularz", "zloz", "złóż", "zapisz sie", "zapisz się", "zglos sie", "zgłoś się", "przystap", "przystąp"];
         const buttons = Array.from(document.querySelectorAll("a, button, [role='button'], input[type='submit']"));
         for (const el of buttons) {
           const text = (el.textContent || "").trim().toLowerCase();
