@@ -94,7 +94,7 @@ async function waitAndClick(page: Page, selector: string, timeout = 15000) {
   await page.click(selector);
 }
 
-async function waitForNav(page: Page, action: () => Promise<void>, timeout = 30000) {
+async function waitForNav(page: Page, action: () => Promise<void>, timeout = 60000) {
   await Promise.all([
     page.waitForNavigation({ waitUntil: "domcontentloaded", timeout }).catch(() => {}),
     action(),
@@ -160,8 +160,19 @@ export async function runAutomationForParticipant(
 
     addStep(log("init", "ok", "Uruchomiono przegladarke"));
 
-    await page.goto("https://aplikuj.projektebon.pl/login", { waitUntil: "domcontentloaded", timeout: 20000 });
     let screenshot = "";
+    let loginPageLoaded = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto("https://aplikuj.projektebon.pl/login", { waitUntil: "domcontentloaded", timeout: 60000 });
+        loginPageLoaded = true;
+        break;
+      } catch (navErr: any) {
+        console.log(`[automation] Login page attempt ${attempt}/3 failed: ${navErr.message}`);
+        if (attempt === 3) throw navErr;
+        await delay(2000);
+      }
+    }
     addStep(log("otwarcie_portalu", "ok", "Otwarto strone logowania"));
 
     await delay(300);
@@ -328,7 +339,7 @@ export async function runAutomationForParticipant(
     );
 
     if (rekLink) {
-      await page.goto(rekLink.href, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await page.goto(rekLink.href, { waitUntil: "domcontentloaded", timeout: 60000 });
       await delay(300);
       addStep(log("rekrutacja", "ok", `Przejscie do: ${rekLink.text} (${rekLink.href})`));
     } else {
@@ -341,7 +352,7 @@ export async function runAutomationForParticipant(
       let found = false;
       for (const url of directUrls) {
         try {
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
           const statusCode = await page.evaluate(() => document.title ? 200 : 404);
           if (statusCode === 200) {
             screenshot = await takeScreenshot(page);

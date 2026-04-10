@@ -108,7 +108,7 @@ router.post("/automation/run-all", async (req, res): Promise<void> => {
             steps.some(s => s.step === "blad_krytyczny" || s.step === "wyslanie_wniosku" || s.step === "stop_przed_wyslaniem")
           ).length;
         },
-        11
+        3
       );
 
       job.results = results;
