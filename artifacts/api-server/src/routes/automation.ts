@@ -72,8 +72,11 @@ router.post("/automation/run-all", async (req, res): Promise<void> => {
           const existing = job.progress.get(participantId) || [];
           existing.push(step);
           job.progress.set(participantId, existing);
+          job.completedCount = Array.from(job.progress.values()).filter(steps => 
+            steps.some(s => s.step === "blad_krytyczny" || s.step === "wyslanie_wniosku" || s.step === "stop_przed_wyslaniem")
+          ).length;
         },
-        2
+        11
       );
 
       job.results = results;

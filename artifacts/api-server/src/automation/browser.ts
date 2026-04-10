@@ -640,19 +640,37 @@ export async function runAutomationForParticipant(
 export async function runAutomationForAll(
   participants: ParticipantData[],
   onProgress?: ProgressCallback,
-  spacingSec = 2
+  concurrency = 4
 ): Promise<AutomationResult[]> {
-  const results: AutomationResult[] = [];
+  const results: AutomationResult[] = new Array(participants.length);
+  let nextIndex = 0;
 
-  for (let i = 0; i < participants.length; i++) {
-    const p = participants[i];
-    const result = await runAutomationForParticipant(p, onProgress);
-    results.push(result);
-
-    if (i < participants.length - 1) {
-      await delay(spacingSec * 1000);
+  async function worker() {
+    while (nextIndex < participants.length) {
+      const idx = nextIndex++;
+      const p = participants[idx];
+      console.log(`[automation] Starting parallel worker for ${p.imie} ${p.nazwisko} (${idx + 1}/${participants.length})`);
+      try {
+        results[idx] = await runAutomationForParticipant(p, onProgress);
+      } catch (err: any) {
+        results[idx] = {
+          participantId: p.id,
+          imie: p.imie,
+          nazwisko: p.nazwisko,
+          loginPortal: p.loginPortal,
+          status: "error",
+          steps: [{ step: "blad_krytyczny", status: "error", message: `Blad: ${err.message}`, timestamp: new Date().toISOString() }],
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        };
+      }
     }
   }
+
+  const workerCount = Math.min(concurrency, participants.length);
+  console.log(`[automation] Launching ${workerCount} parallel workers for ${participants.length} participants`);
+  const workers = Array.from({ length: workerCount }, () => worker());
+  await Promise.all(workers);
 
   return results;
 }
