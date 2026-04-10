@@ -46,14 +46,14 @@ export default function Login({ onLogin }: LoginProps) {
 
         <form onSubmit={handleSubmit} className="bg-white/5 backdrop-blur border border-white/10 rounded-xl p-6 space-y-5">
           <div className="space-y-2">
-            <Label className="text-white/70 text-sm">Email administratora</Label>
+            <Label className="text-white/70 text-sm">Login</Label>
             <div className="relative">
               <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
               <Input
-                type="email"
+                type="text"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="Wpisz email..."
+                placeholder="Wpisz login..."
                 className="pl-10 bg-white/5 border-white/10 text-white placeholder:text-white/30 focus:border-white/30"
                 required
                 autoFocus
