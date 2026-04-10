@@ -8,8 +8,8 @@ interface LoginProps {
   onLogin: () => void;
 }
 
-const ADMIN_EMAIL = "balejasandra@gmail.com";
-const ADMIN_PASSWORD = "OlaDiana1969@";
+const ADMIN_EMAIL = "admin";
+const ADMIN_PASSWORD = "admin";
 
 export default function Login({ onLogin }: LoginProps) {
   const [email, setEmail] = useState("");
