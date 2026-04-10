@@ -445,75 +445,15 @@ export async function runAutomationForParticipant(
       addStep(log("formularz_otwarcie", "skip", "Pominieto — NABOR 9 nie jest jeszcze dostepny"));
     }
 
-    // Fill form fields using page.evaluate for speed
-    const filledCount = await page.evaluate((p) => {
-      const fieldMappings = [
-        { labels: ["imię", "imie", "first_name", "firstname"], value: p.imie },
-        { labels: ["nazwisko", "last_name", "lastname", "surname"], value: p.nazwisko },
-        { labels: ["pesel"], value: p.pesel },
-        { labels: ["email", "e-mail", "adres email"], value: p.email },
-        { labels: ["telefon", "phone", "numer telefonu", "tel"], value: p.telefon },
-        { labels: ["ulica", "adres", "address", "street"], value: p.adres },
-        { labels: ["kod pocztowy", "kod_pocztowy", "postal", "zip"], value: p.kodPocztowy },
-        { labels: ["miasto", "city", "miejscowość", "miejscowosc"], value: p.miasto },
-      ];
+    // The EBON portal form has sections with "Edytuj" buttons:
+    // 1. Dane kontaktowe -> Edytuj
+    // 2. Adres zamieszkania -> Edytuj
+    // 3. Wykształcenie i status na rynku pracy -> Edytuj
+    // 4. Przynależność do grupy docelowej -> Edytuj
+    // 5. Udział w Projekcie -> Edytuj
+    // Then "Wyślij zgłoszenie" to submit
 
-      let count = 0;
-      const inputs = Array.from(document.querySelectorAll("input, textarea")) as HTMLInputElement[];
-
-      for (const mapping of fieldMappings) {
-        let filled = false;
-        for (const label of mapping.labels) {
-          for (const input of inputs) {
-            if (input.type === "hidden" || input.type === "submit") continue;
-            const name = (input.name || "").toLowerCase();
-            const id = (input.id || "").toLowerCase();
-            const placeholder = (input.placeholder || "").toLowerCase();
-            const ariaLabel = (input.getAttribute("aria-label") || "").toLowerCase();
-
-            if (name.includes(label) || id.includes(label) || placeholder.includes(label) || ariaLabel.includes(label)) {
-              const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-              if (nativeInputValueSetter) {
-                nativeInputValueSetter.call(input, mapping.value);
-              } else {
-                input.value = mapping.value;
-              }
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              input.dispatchEvent(new Event('change', { bubbles: true }));
-              filled = true;
-              count++;
-              break;
-            }
-          }
-          if (filled) break;
-
-          // Try via labels
-          if (!filled) {
-            const labels = Array.from(document.querySelectorAll("label"));
-            for (const lbl of labels) {
-              if ((lbl.textContent || "").toLowerCase().includes(label)) {
-                const forId = lbl.getAttribute("for");
-                if (forId) {
-                  const target = document.getElementById(forId) as HTMLInputElement;
-                  if (target) {
-                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                    if (setter) setter.call(target, mapping.value);
-                    else target.value = mapping.value;
-                    target.dispatchEvent(new Event('input', { bubbles: true }));
-                    target.dispatchEvent(new Event('change', { bubbles: true }));
-                    filled = true;
-                    count++;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-          if (filled) break;
-        }
-      }
-      return count;
-    }, {
+    const participantData = {
       imie: participant.imie,
       nazwisko: participant.nazwisko,
       pesel: participant.pesel,
@@ -522,29 +462,175 @@ export async function runAutomationForParticipant(
       adres: participant.adres,
       kodPocztowy: participant.kodPocztowy,
       miasto: participant.miasto,
-    });
+    };
 
-    await delay(500);
+    // First, try clicking "Wypełnij zgłoszenie" if visible
+    const wypelnijResult = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll("a, button, [role='button']"));
+      for (const el of links) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text.includes("wypełnij zgłoszenie") || text.includes("wypelnij zgloszenie")) {
+          (el as HTMLElement).click();
+          return { found: true, text: (el.textContent || "").trim().substring(0, 60) };
+        }
+      }
+      return { found: false, text: "" };
+    });
+    if (wypelnijResult.found) {
+      await delay(1500);
+      addStep(log("wypelnij_zgloszenie", "ok", `Kliknieto: "${wypelnijResult.text}"`));
+    }
+
+    // Helper: click an "Edytuj" button near a section heading, fill fields, save
+    const sectionNames = [
+      "dane kontaktowe",
+      "adres zamieszkania",
+      "wykształcenie",
+      "przynależność",
+      "udział w projekcie",
+    ];
+
+    let totalFilled = 0;
+
+    for (const sectionName of sectionNames) {
+      // Find and click the "Edytuj" link/button in this section
+      const editClicked = await page.evaluate((secName) => {
+        // Strategy 1: find heading/text with section name, then find nearby "Edytuj"
+        const allElements = Array.from(document.querySelectorAll("*"));
+        for (const el of allElements) {
+          const text = (el.textContent || "").trim().toLowerCase();
+          if (text.includes(secName) && text.includes("edytuj")) {
+            // This element contains both section name and "edytuj" - find the edytuj link inside
+            const editLinks = el.querySelectorAll("a, button");
+            for (const link of Array.from(editLinks)) {
+              const linkText = (link.textContent || "").trim().toLowerCase();
+              if (linkText.includes("edytuj")) {
+                (link as HTMLElement).click();
+                return { found: true, section: secName };
+              }
+            }
+          }
+        }
+
+        // Strategy 2: find sections/cards and match by structure
+        const cards = Array.from(document.querySelectorAll("[class*='card'], [class*='section'], [class*='panel'], div, td, tr"));
+        for (const card of cards) {
+          const directText = (card.textContent || "").toLowerCase();
+          if (directText.includes(secName)) {
+            const editBtns = card.querySelectorAll("a, button");
+            for (const btn of Array.from(editBtns)) {
+              const btnText = (btn.textContent || "").trim().toLowerCase();
+              if (btnText === "edytuj" || btnText.includes("edytuj")) {
+                (btn as HTMLElement).click();
+                return { found: true, section: secName };
+              }
+            }
+          }
+        }
+        return { found: false, section: secName };
+      }, sectionName);
+
+      if (!editClicked.found) {
+        addStep(log(`sekcja_${sectionName.replace(/\s/g, '_')}`, "skip", `Nie znaleziono przycisku Edytuj dla: ${sectionName}`));
+        continue;
+      }
+
+      await delay(2000);
+
+      // Now fill any visible input fields on the page
+      const filledInSection = await page.evaluate((p) => {
+        const fieldMappings = [
+          { labels: ["imię", "imie", "first_name", "firstname", "name"], value: p.imie },
+          { labels: ["nazwisko", "last_name", "lastname", "surname"], value: p.nazwisko },
+          { labels: ["pesel"], value: p.pesel },
+          { labels: ["email", "e-mail", "adres email", "mail"], value: p.email },
+          { labels: ["telefon", "phone", "numer telefonu", "tel", "komórkowy", "komorkowy"], value: p.telefon },
+          { labels: ["ulica", "adres", "address", "street"], value: p.adres },
+          { labels: ["kod pocztowy", "kod_pocztowy", "postal", "zip", "kod"], value: p.kodPocztowy },
+          { labels: ["miasto", "city", "miejscowość", "miejscowosc", "town"], value: p.miasto },
+        ];
+
+        let count = 0;
+        const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']):not([type='submit']):not([type='checkbox']):not([type='radio']), textarea, select")) as HTMLInputElement[];
+
+        for (const input of inputs) {
+          if (!input.offsetParent) continue; // skip hidden
+          const name = (input.name || "").toLowerCase();
+          const id = (input.id || "").toLowerCase();
+          const placeholder = (input.placeholder || "").toLowerCase();
+          const ariaLabel = (input.getAttribute("aria-label") || "").toLowerCase();
+          // Also check parent label text
+          const parentLabel = input.closest("label")?.textContent?.toLowerCase() || "";
+          const forLabel = input.id ? (document.querySelector(`label[for="${input.id}"]`)?.textContent?.toLowerCase() || "") : "";
+
+          const allText = `${name} ${id} ${placeholder} ${ariaLabel} ${parentLabel} ${forLabel}`;
+
+          for (const mapping of fieldMappings) {
+            if (mapping.labels.some(label => allText.includes(label))) {
+              if (input.value && input.value.trim().length > 0) {
+                // Already has a value, skip
+                count++;
+                break;
+              }
+              const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+              if (nativeInputValueSetter) {
+                nativeInputValueSetter.call(input, mapping.value);
+              } else {
+                input.value = mapping.value;
+              }
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+              input.dispatchEvent(new Event('blur', { bubbles: true }));
+              count++;
+              break;
+            }
+          }
+        }
+        return count;
+      }, participantData);
+
+      totalFilled += filledInSection;
+
+      // Try to save/close the section - look for "Zapisz", "Zatwierdź", "OK" button
+      const saveResult = await page.evaluate(() => {
+        const saveKeywords = ["zapisz", "zatwierdź", "zatwierdz", "ok", "save", "dalej", "zamknij"];
+        const buttons = Array.from(document.querySelectorAll("button, input[type='submit'], a.btn"));
+        for (const btn of buttons) {
+          const text = (btn.textContent || "").trim().toLowerCase();
+          if (saveKeywords.some(kw => text.includes(kw))) {
+            (btn as HTMLElement).click();
+            return { saved: true, text: (btn.textContent || "").trim().substring(0, 40) };
+          }
+        }
+        return { saved: false, text: "" };
+      });
+
+      await delay(1500);
+      addStep(log(
+        `sekcja_${sectionName.replace(/\s/g, '_')}`,
+        "ok",
+        `Sekcja "${sectionName}": wypelniono ${filledInSection} pol${saveResult.saved ? `, zapisano ("${saveResult.text}")` : ""}`
+      ));
+    }
+
     screenshot = await takeScreenshot(page);
     addStep(
       log(
         "formularz_wypelnienie",
-        filledCount > 0 ? "ok" : "skip",
-        `Wypelniono ${filledCount} z 8 pol formularza`,
+        totalFilled > 0 ? "ok" : "skip",
+        `Wypelniono lacznie ${totalFilled} pol w ${sectionNames.length} sekcjach`,
         screenshot
       )
     );
 
     if (autoSubmit) {
-      // Use page.evaluate for faster submit button detection
+      // Click "Wyślij zgłoszenie" button
       const submitResult = await page.evaluate(() => {
-        const submitKeywords = ["wyslij", "wyślij", "zatwierdz", "zatwierdź", "zapisz", "submit", "zloz wniosek", "złóż wniosek", "aplikuj", "wyslij wniosek"];
-        const buttons = Array.from(document.querySelectorAll("button, input[type='submit'], a.btn, a.button"));
+        const submitKeywords = ["wyślij zgłoszenie", "wyslij zgloszenie", "wyślij", "wyslij", "submit", "złóż wniosek", "zloz wniosek"];
+        const buttons = Array.from(document.querySelectorAll("a, button, input[type='submit'], [role='button']"));
         for (const btn of buttons) {
           const text = (btn.textContent || "").trim().toLowerCase();
-          const type = (btn as HTMLInputElement).type || "";
-          const value = ((btn as HTMLInputElement).value || "").toLowerCase();
-          if (submitKeywords.some(kw => text.includes(kw) || value.includes(kw)) || type === "submit") {
+          if (submitKeywords.some(kw => text.includes(kw))) {
             (btn as HTMLElement).click();
             return { clicked: true, text: (btn.textContent || "").trim().substring(0, 60) };
           }
@@ -552,25 +638,41 @@ export async function runAutomationForParticipant(
         return { clicked: false, text: "" };
       });
 
-      await delay(1500);
+      await delay(3000);
 
       if (submitResult.clicked) {
+        // Check for confirmation dialog/popup and confirm if needed
+        const confirmResult = await page.evaluate(() => {
+          const confirmKeywords = ["tak", "potwierdz", "potwierdzam", "yes", "ok", "wyślij", "wyslij"];
+          const buttons = Array.from(document.querySelectorAll("button, a, [role='button']"));
+          for (const btn of buttons) {
+            const text = (btn.textContent || "").trim().toLowerCase();
+            if (confirmKeywords.some(kw => text === kw || text.includes(kw))) {
+              (btn as HTMLElement).click();
+              return { confirmed: true, text: (btn.textContent || "").trim().substring(0, 40) };
+            }
+          }
+          return { confirmed: false, text: "" };
+        });
+
+        await delay(2000);
         screenshot = await takeScreenshot(page);
         addStep(
           log(
             "wyslanie_wniosku",
             "ok",
-            `Kliknieto przycisk wyslania ("${submitResult.text}"). Strona po wyslaniu: ${page.url()}`,
+            `Kliknieto: "${submitResult.text}"${confirmResult.confirmed ? ` + potwierdzono: "${confirmResult.text}"` : ""}. Strona: ${page.url()}`,
             screenshot
           )
         );
         status = "completed";
       } else {
+        screenshot = await takeScreenshot(page);
         addStep(
           log(
             "wyslanie_wniosku",
             "skip",
-            `Nie znaleziono przycisku wyslania wniosku. Strona: ${page.url()}`,
+            `Nie znaleziono przycisku "Wyslij zgloszenie". Strona: ${page.url()}`,
             screenshot
           )
         );
