@@ -1,28 +1,23 @@
-import puppeteer, { type Browser, type Page } from "puppeteer";
-import { existsSync } from "fs";
+import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import { existsSync, readdirSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 
 const PORTAL_URL = "https://projektebon.pl";
 const NABOR_NAME = 'NABÓR 9 „Nabór z Bilansem Kompetencji i doradztwem zawodowym"';
 
-function findChromiumPath(): string | undefined {
+function findChromiumPath(): string {
   if (process.env.CHROMIUM_PATH && existsSync(process.env.CHROMIUM_PATH)) {
+    console.log(`[automation] Using CHROMIUM_PATH: ${process.env.CHROMIUM_PATH}`);
     return process.env.CHROMIUM_PATH;
   }
-
-  try {
-    const defaultPath = puppeteer.executablePath();
-    if (defaultPath && existsSync(defaultPath)) {
-      console.log(`[automation] Found puppeteer Chrome at: ${defaultPath}`);
-      return defaultPath;
-    }
-  } catch {}
 
   const candidates = [
     "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome",
   ];
 
   for (const p of candidates) {
@@ -32,8 +27,7 @@ function findChromiumPath(): string | undefined {
     }
   }
 
-  console.log("[automation] No browser found, will use puppeteer default");
-  return undefined;
+  throw new Error("Nie znaleziono Chromium/Chrome. Ustaw zmienna CHROMIUM_PATH lub zainstaluj chromium.");
 }
 
 interface ParticipantData {
@@ -125,31 +119,36 @@ export async function runAutomationForParticipant(
   try {
     const chromiumPath = findChromiumPath();
     const launchOptions: any = {
-      headless: true,
+      headless: "shell",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
-        "--single-process",
         "--no-zygote",
         "--disable-extensions",
         "--disable-background-networking",
         "--disable-default-apps",
         "--disable-sync",
         "--disable-translate",
+        "--disable-domain-reliability",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-ipc-flooding-protection",
         "--metrics-recording-only",
         "--mute-audio",
         "--no-first-run",
+        "--js-flags=--max-old-space-size=256",
         "--window-size=1280,900",
       ],
-      protocolTimeout: 60000,
+      protocolTimeout: 120000,
+      timeout: 60000,
     };
-    if (chromiumPath) {
-      launchOptions.executablePath = chromiumPath;
-    }
-    console.log(`[automation] Launching browser: ${chromiumPath || 'puppeteer-default'}`);
+    launchOptions.executablePath = chromiumPath;
+    console.log(`[automation] Launching browser: ${chromiumPath}`);
     browser = await puppeteer.launch(launchOptions);
+    console.log(`[automation] Browser launched successfully, PID: ${browser.process()?.pid}`);
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
