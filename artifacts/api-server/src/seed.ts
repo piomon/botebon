@@ -161,17 +161,22 @@ const SEED_DATA = [
 
 export async function seedParticipants() {
   try {
-    const [result] = await db.select({ total: count() }).from(participantsTable);
-    if (result && result.total > 0) {
-      logger.info({ count: result.total }, "Participants already exist, skipping seed");
+    const existing = await db.select({ pesel: participantsTable.pesel }).from(participantsTable);
+    const existingPesels = new Set(existing.map(e => e.pesel));
+
+    const toInsert = SEED_DATA.filter(p => !existingPesels.has(p.pesel));
+
+    if (toInsert.length === 0) {
+      logger.info({ count: existing.length }, "All participants already exist, skipping seed");
       return;
     }
 
-    logger.info("Seeding 11 participants...");
-    for (const p of SEED_DATA) {
+    logger.info({ toInsert: toInsert.length, existing: existing.length }, "Seeding missing participants...");
+    for (const p of toInsert) {
       await db.insert(participantsTable).values(p);
+      logger.info(`Inserted: ${p.imie} ${p.nazwisko}`);
     }
-    logger.info("Seed complete: 11 participants inserted");
+    logger.info(`Seed complete: ${toInsert.length} new participants inserted`);
   } catch (err) {
     logger.error({ err }, "Seed failed");
   }
