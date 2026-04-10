@@ -96,7 +96,7 @@ async function waitAndClick(page: Page, selector: string, timeout = 15000) {
 
 async function waitForNav(page: Page, action: () => Promise<void>, timeout = 30000) {
   await Promise.all([
-    page.waitForNavigation({ waitUntil: "networkidle2", timeout }).catch(() => {}),
+    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout }).catch(() => {}),
     action(),
   ]);
 }
@@ -139,8 +139,10 @@ export async function runAutomationForParticipant(
         "--metrics-recording-only",
         "--mute-audio",
         "--no-first-run",
-        "--js-flags=--max-old-space-size=256",
+        "--js-flags=--max-old-space-size=128",
         "--window-size=1280,900",
+        "--disable-features=site-per-process",
+        "--disable-component-update",
       ],
       protocolTimeout: 120000,
       timeout: 60000,
@@ -158,44 +160,11 @@ export async function runAutomationForParticipant(
 
     addStep(log("init", "ok", "Uruchomiono przegladarke"));
 
-    await page.goto(PORTAL_URL, { waitUntil: "networkidle2", timeout: 30000 });
-    let screenshot = await takeScreenshot(page);
-    addStep(log("otwarcie_portalu", "ok", `Otwarto ${PORTAL_URL}`, screenshot));
+    await page.goto("https://aplikuj.projektebon.pl/login", { waitUntil: "domcontentloaded", timeout: 20000 });
+    let screenshot = "";
+    addStep(log("otwarcie_portalu", "ok", "Otwarto strone logowania"));
 
-    await delay(1000);
-
-    // Accept cookies if present
-    try {
-      const cookieButtons = await page.$$("button, a");
-      for (const btn of cookieButtons) {
-        const text = await btn.evaluate((el) => el.textContent?.toLowerCase() || "");
-        if (text.includes("akceptuj") || text.includes("accept") || text.includes("zgadzam")) {
-          await btn.click();
-          await delay(500);
-          addStep(log("cookies", "ok", "Zaakceptowano cookies"));
-          break;
-        }
-      }
-    } catch {}
-
-    // Find and click "Aplikacja EBON" link to go to login page
-    const appLink = await page.$$eval("a", (els) =>
-      els.map((e) => ({ text: e.textContent?.trim() || "", href: e.href }))
-    );
-    const ebonAppLink = appLink.find(
-      (l) =>
-        l.text.toLowerCase().includes("aplikacja ebon") ||
-        l.text.toLowerCase().includes("aplikacja") ||
-        l.href.includes("aplikuj") ||
-        l.text.toLowerCase().includes("zaloguj")
-    );
-
-    if (ebonAppLink) {
-      await page.goto(ebonAppLink.href, { waitUntil: "networkidle2", timeout: 30000 });
-      await delay(1000);
-      screenshot = await takeScreenshot(page);
-      addStep(log("przejscie_do_aplikacji", "ok", `Kliknieto: ${ebonAppLink.text} -> ${ebonAppLink.href}`, screenshot));
-    }
+    await delay(300);
 
     // Now find login form - could be on current page or need to navigate
     const loginSelectors = [
@@ -228,7 +197,7 @@ export async function runAutomationForParticipant(
           const text = await tab.evaluate((el) => el.textContent?.trim().toLowerCase() || "");
           if (text.includes("zaloguj") || text.includes("logowanie") || text === "login") {
             await tab.click();
-            await delay(1000);
+            await delay(300);
             break;
           }
         }
@@ -260,7 +229,7 @@ export async function runAutomationForParticipant(
     }
 
     await page.click(loginField);
-    await page.type(loginField, participant.loginPortal, { delay: 30 });
+    await page.type(loginField, participant.loginPortal, { delay: 5 });
 
     const passwordSelectors = ['input[type="password"]', 'input[name="password"]', 'input[name="haslo"]', '#password'];
     let passwordField: string | null = null;
@@ -276,11 +245,10 @@ export async function runAutomationForParticipant(
 
     if (passwordField) {
       await page.click(passwordField);
-      await page.type(passwordField, participant.haslo, { delay: 30 });
+      await page.type(passwordField, participant.haslo, { delay: 5 });
     }
 
-    screenshot = await takeScreenshot(page);
-    addStep(log("logowanie_wypelnienie", "ok", `Wypelniono login: ${participant.loginPortal}`, screenshot));
+    addStep(log("logowanie_wypelnienie", "ok", `Wypelniono login: ${participant.loginPortal}`));
 
     const submitSelectors = [
       'button[type="submit"]',
@@ -326,9 +294,8 @@ export async function runAutomationForParticipant(
       } catch {}
     }
 
-    await delay(2000);
-    screenshot = await takeScreenshot(page);
-    addStep(log("logowanie_submit", submitted ? "ok" : "error", submitted ? "Wyslano formularz logowania" : "Nie udalo sie wyslac formularza", screenshot));
+    await delay(500);
+    addStep(log("logowanie_submit", submitted ? "ok" : "error", submitted ? "Wyslano formularz logowania" : "Nie udalo sie wyslac formularza"));
 
     if (!submitted) {
       status = "error";
@@ -361,10 +328,9 @@ export async function runAutomationForParticipant(
     );
 
     if (rekLink) {
-      await page.goto(rekLink.href, { waitUntil: "networkidle2", timeout: 30000 });
-      await delay(1000);
-      screenshot = await takeScreenshot(page);
-      addStep(log("rekrutacja", "ok", `Przejscie do: ${rekLink.text} (${rekLink.href})`, screenshot));
+      await page.goto(rekLink.href, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await delay(300);
+      addStep(log("rekrutacja", "ok", `Przejscie do: ${rekLink.text} (${rekLink.href})`));
     } else {
       // Try direct URL patterns for the portal
       const directUrls = [
@@ -375,7 +341,7 @@ export async function runAutomationForParticipant(
       let found = false;
       for (const url of directUrls) {
         try {
-          await page.goto(url, { waitUntil: "networkidle2", timeout: 15000 });
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
           const statusCode = await page.evaluate(() => document.title ? 200 : 404);
           if (statusCode === 200) {
             screenshot = await takeScreenshot(page);
@@ -391,8 +357,7 @@ export async function runAutomationForParticipant(
       }
     }
 
-    // Wait for dynamic content to load on recruitment list page
-    await delay(3000);
+    await delay(1000);
     await page.evaluate(() => window.scrollTo(0, 0));
     await delay(500);
 
@@ -427,9 +392,8 @@ export async function runAutomationForParticipant(
     let naborFound = naborResult.found;
 
     if (naborFound) {
-      await delay(3000);
-      screenshot = await takeScreenshot(page);
-      addStep(log("nabor", "ok", `Znaleziono i kliknieto NABOR 9 ("${naborResult.text}"). Strona: ${page.url()}`, screenshot));
+      await delay(1000);
+      addStep(log("nabor", "ok", `Znaleziono i kliknieto NABOR 9 ("${naborResult.text}"). Strona: ${page.url()}`));
     } else {
       screenshot = await takeScreenshot(page);
       addStep(log(
@@ -459,10 +423,9 @@ export async function runAutomationForParticipant(
       });
 
       if (applyResult.found) {
-        await delay(3000);
+        await delay(1000);
         formOpened = true;
-        screenshot = await takeScreenshot(page);
-        addStep(log("formularz_otwarcie", "ok", `Kliknieto: "${applyResult.text}". Strona: ${page.url()}`, screenshot));
+        addStep(log("formularz_otwarcie", "ok", `Kliknieto: "${applyResult.text}". Strona: ${page.url()}`));
       } else {
         screenshot = await takeScreenshot(page);
         addStep(log("formularz_otwarcie", "skip", `Nie znaleziono przycisku zlozenia wniosku na stronie naboru. Strona: ${page.url()}`, screenshot));
@@ -578,10 +541,10 @@ export async function runAutomationForParticipant(
         return { clicked: false, text: "" };
       });
 
-      await delay(3000);
-      screenshot = await takeScreenshot(page);
+      await delay(1500);
 
       if (submitResult.clicked) {
+        screenshot = await takeScreenshot(page);
         addStep(
           log(
             "wyslanie_wniosku",

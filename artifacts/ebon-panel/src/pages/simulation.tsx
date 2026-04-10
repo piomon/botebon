@@ -93,6 +93,22 @@ export default function Simulation() {
   const [allStatus, setAllStatus] = useState<any>(null);
   const [expandedScreenshots, setExpandedScreenshots] = useState<Record<string, boolean>>({});
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [prewarmStatus, setPrewarmStatus] = useState<"idle" | "warming" | "ok" | "error">("idle");
+  const [prewarmMs, setPrewarmMs] = useState<number | null>(null);
+
+  const runPrewarm = async () => {
+    setPrewarmStatus("warming");
+    try {
+      const res = await fetch(`${API_BASE}/automation/prewarm`, { method: "POST" });
+      const data = await res.json();
+      setPrewarmMs(data.ms);
+      setPrewarmStatus(data.ok ? "ok" : "error");
+      toast({ title: data.ok ? `Serwer rozgrzany (${data.ms}ms)` : `Blad rozgrzewki: ${data.error}` });
+    } catch (err: any) {
+      setPrewarmStatus("error");
+      toast({ title: "Blad", description: err.message, variant: "destructive" });
+    }
+  };
 
   const runSingle = async () => {
     if (!selectedParticipantId) return;
@@ -231,6 +247,36 @@ export default function Simulation() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="border-yellow-200 bg-yellow-50/50">
+        <CardContent className="pt-6">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            <div className="flex-1">
+              <div className="font-semibold text-sm flex items-center gap-2 mb-1">
+                <Zap className="h-4 w-4 text-yellow-600" /> Rozgrzewka serwera
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Kliknij przed naborem, aby rozgrzac serwer i Chromium. Eliminuje opoznienie zimnego startu.
+                {prewarmMs !== null && <span className="ml-2 font-medium">Czas: {prewarmMs}ms</span>}
+              </div>
+            </div>
+            <Button
+              onClick={runPrewarm}
+              disabled={prewarmStatus === "warming"}
+              variant={prewarmStatus === "ok" ? "outline" : "default"}
+              className="shrink-0"
+            >
+              {prewarmStatus === "warming" ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Rozgrzewam...</>
+              ) : prewarmStatus === "ok" ? (
+                <><CheckCircle2 className="mr-2 h-4 w-4 text-green-600" /> Gotowy</>
+              ) : (
+                <><Zap className="mr-2 h-4 w-4" /> Rozgrzej serwer</>
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

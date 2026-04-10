@@ -2,8 +2,40 @@ import { Router, type IRouter } from "express";
 import { db, participantsTable, operationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { runAutomationForParticipant, runAutomationForAll, type AutomationResult, type StepLog } from "../automation/browser";
+import puppeteer from "puppeteer-core";
+import { existsSync } from "fs";
 
 const router: IRouter = Router();
+
+router.post("/automation/prewarm", async (_req, res): Promise<void> => {
+  const start = Date.now();
+  const chromiumPaths = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium",
+  ].filter(Boolean) as string[];
+
+  const chromiumPath = chromiumPaths.find(p => existsSync(p));
+  if (!chromiumPath) {
+    res.json({ ok: false, error: "Chromium not found", ms: Date.now() - start });
+    return;
+  }
+
+  try {
+    const browser = await puppeteer.launch({
+      headless: "shell",
+      executablePath: chromiumPath,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      protocolTimeout: 30000,
+    });
+    const page = await browser.newPage();
+    await page.goto("https://projektebon.pl", { waitUntil: "domcontentloaded", timeout: 15000 });
+    const title = await page.title();
+    await browser.close();
+    res.json({ ok: true, chromiumPath, title, ms: Date.now() - start });
+  } catch (err: any) {
+    res.json({ ok: false, error: err.message, ms: Date.now() - start });
+  }
+});
 
 const activeJobs: Map<string, {
   status: "running" | "completed" | "error";
