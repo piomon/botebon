@@ -168,6 +168,21 @@ const SEED_DATA = [
     portal: "fst",
     validationStatus: "ok" as const,
   },
+  {
+    imie: "Aneta",
+    nazwisko: "Machańska",
+    pesel: "69071704402",
+    email: "Anetamachanska4@gmail.com",
+    telefon: "",
+    adres: "ul. Traktorowa 89 m 11",
+    kodPocztowy: "91-203",
+    miasto: "Łódź",
+    loginPortal: "Anetamachanska4@gmail.com",
+    haslo: "Diana1988@",
+    notatki: "zatrudniona w urzędzie pracy; nieprowadząca działalności; brak formalnego wykształcenia",
+    portal: "fst",
+    validationStatus: "ok" as const,
+  },
 ];
 
 export async function seedParticipants() {

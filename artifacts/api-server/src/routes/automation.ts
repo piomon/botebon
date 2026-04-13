@@ -178,14 +178,15 @@ router.post("/automation/run-single-sync/:id", async (req, res): Promise<void> =
     const dbPortal = (participant as any).portal || "ebon";
     const requestedPortal = req.body?.portal;
     const usePortal = requestedPortal || (dbPortal === "fst" ? "fst" : dbPortal === "both" ? "ebon" : dbPortal);
+    const autoSubmit = req.body?.autoSubmit !== false;
     const result = usePortal === "fst"
-      ? await runFstAutomationForParticipant(participant as any)
-      : await runAutomationForParticipant(participant as any);
+      ? await runFstAutomationForParticipant(participant as any, undefined, autoSubmit)
+      : await runAutomationForParticipant(participant as any, undefined, autoSubmit);
 
     await db.insert(operationsTable).values({
       operationType: "automation",
       status: result.status === "error" ? "errors" : "ok",
-      summary: `Automatyzacja (${participantPortal.toUpperCase()}): ${participant.imie} ${participant.nazwisko} — ${result.status}, ${result.steps.length} krokow`,
+      summary: `Automatyzacja (${usePortal.toUpperCase()}): ${participant.imie} ${participant.nazwisko} — ${result.status}, ${result.steps.length} krokow`,
       resultData: JSON.stringify(result),
     });
 

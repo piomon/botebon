@@ -1236,46 +1236,76 @@ export async function runFstAutomationForParticipant(
 
     addStep(log("logowanie_submit", "ok", `Zalogowano. URL: ${currentUrl}`, screenshot));
 
-    // STEP 4: Navigate to "Złóż wniosek" (click link on dashboard or sidebar)
-    const navResult = await page.evaluate(() => {
+    // STEP 4: Navigate to Nabory via link click (NOT page.goto - it breaks Blazor session)
+    await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll("a"));
       for (const link of links) {
-        const t = (link.textContent || "").trim().toLowerCase();
-        if (t.includes("złożyć wniosek")) {
+        const href = link.getAttribute("href") || "";
+        const text = (link.textContent || "").trim().toLowerCase();
+        if (href.toLowerCase() === "nabory" || text.includes("złóż wniosek") || text.includes("nabory")) {
           (link as HTMLElement).click();
-          return { clicked: true, text: (link.textContent || "").trim().substring(0, 80), via: "dashboard" };
+          return;
         }
       }
-      for (const link of links) {
-        const t = (link.textContent || "").trim().toLowerCase();
-        if (t === "złóż wniosek") {
-          (link as HTMLElement).click();
-          return { clicked: true, text: (link.textContent || "").trim().substring(0, 80), via: "sidebar" };
-        }
-      }
-      return { clicked: false, text: "", via: "" };
     });
-
-    await delay(5000);
+    await delay(6000);
     screenshot = await takeScreenshot(page);
-    addStep(log("nawigacja_nabory", navResult.clicked ? "ok" : "error",
-      `Nawigacja do naborow: ${navResult.clicked ? `"${navResult.text}" (${navResult.via})` : "nie znaleziono linku"}. URL: ${page.url()}`,
-      screenshot));
 
-    if (!navResult.clicked) {
-      status = "error";
-      throw new Error("Nie znaleziono linku do naborow");
+    // Wait for Blazor to render the nabory list (up to 15s)
+    for (let waitAttempt = 0; waitAttempt < 5; waitAttempt++) {
+      const hasContent = await page.evaluate(() => {
+        const body = document.body?.innerText || "";
+        return body.includes("Nabór") || body.includes("nabór") || body.includes("Złóż") || body.includes("Kumulacja");
+      });
+      if (hasContent) break;
+      await delay(3000);
     }
 
-    // STEP 5: Click "Złóż wniosek" button next to the active nabor
-    const zlozResult = await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll("button.btn-primary"));
-      for (const btn of btns) {
-        const t = (btn.textContent || "").trim().toLowerCase();
-        if (t.includes("złóż wniosek") || t.includes("złóż")) {
-          (btn as HTMLElement).click();
-          return { clicked: true, text: (btn.textContent || "").trim() };
+    // Debug: log all page content and buttons
+    const naborPageInfo = await page.evaluate(() => {
+      const text = document.body?.innerText?.substring(0, 2000) || "";
+      const allElements = Array.from(document.querySelectorAll("button, a, input[type='submit']")).filter(
+        b => !(b as Element).closest("nav") && !(b as Element).closest(".navbar")
+      ).map(b => ({
+        tag: b.tagName,
+        text: (b.textContent || "").trim().substring(0, 80),
+        cls: (b as Element).className?.substring(0, 50) || "",
+        href: b.getAttribute?.("href")?.substring(0, 50) || "",
+      }));
+      return { text: text.substring(0, 1000), elements: allElements };
+    });
+    addStep(log("nawigacja_nabory", "ok",
+      `Nabory. URL: ${page.url()}. Elementy: ${JSON.stringify(naborPageInfo.elements.map(b => `${b.tag}:${b.text}:${b.cls}`)).substring(0, 300)}. Tekst: ${naborPageInfo.text.substring(0, 200)}`,
+      screenshot));
+
+    // STEP 5: Click action button — search in content area, exclude navbar
+    let zlozResult = await page.evaluate(() => {
+      const keywords = ["złóż wniosek", "kontynuuj", "edytuj wniosek", "przejdź do wniosku", "otwórz"];
+      const nonNavElements = Array.from(document.querySelectorAll("button, a, input[type='submit']")).filter(
+        b => !(b as Element).closest("nav") && !(b as Element).closest(".navbar") && !b.classList.contains("nav-link")
+      );
+      for (const kw of keywords) {
+        for (const el of nonNavElements) {
+          const t = (el.textContent || "").trim().toLowerCase();
+          if (t.includes(kw)) {
+            (el as HTMLElement).click();
+            return { clicked: true, text: (el.textContent || "").trim() };
+          }
         }
+      }
+      // Fallback: any btn-primary/btn-danger/btn-success not in nav
+      for (const el of nonNavElements) {
+        const cls = (el as Element).className || "";
+        if (cls.includes("btn-primary") || cls.includes("btn-danger") || cls.includes("btn-success")) {
+          (el as HTMLElement).click();
+          return { clicked: true, text: (el.textContent || "").trim() + " (color-btn)" };
+        }
+      }
+      // Last resort: any button in a table or card
+      const tableBtn = document.querySelector("table button, .card button, .card a");
+      if (tableBtn) {
+        (tableBtn as HTMLElement).click();
+        return { clicked: true, text: (tableBtn.textContent || "").trim() + " (table-btn)" };
       }
       return { clicked: false, text: "" };
     });
@@ -1283,69 +1313,71 @@ export async function runFstAutomationForParticipant(
     await delay(5000);
     screenshot = await takeScreenshot(page);
 
-    // Check if "Złożono wniosek" message appeared (already submitted)
-    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || "");
-    const alreadySubmitted = pageText.toLowerCase().includes("złożono wniosek");
+    // Check page state
+    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 3000) || "");
+    const formCheckUrl = page.url().toLowerCase();
+    const alreadySubmitted = pageText.toLowerCase().includes("złożono wniosek w projekcie");
+    const alreadyOnForm = formCheckUrl.includes("wybierzrodzajwniosku") || formCheckUrl.includes("mieszkamlodzkie") || formCheckUrl.includes("formularz");
+    const hasFormElements = await page.evaluate(() => document.querySelectorAll("select").length >= 2);
 
     if (alreadySubmitted) {
       addStep(log("wniosek_juz_zlozony", "ok",
         `Wniosek juz zostal zlozony wczesniej dla tego konta. URL: ${page.url()}`, screenshot));
       status = "completed";
-    } else if (zlozResult.clicked) {
-      addStep(log("klik_zloz_wniosek", "ok",
-        `Kliknieto "${zlozResult.text}". URL: ${page.url()}`, screenshot));
+    } else if (zlozResult.clicked || alreadyOnForm || hasFormElements) {
+      addStep(log("klik_zloz_wniosek", zlozResult.clicked ? "ok" : "skip",
+        zlozResult.clicked ? `Kliknieto "${zlozResult.text}". URL: ${page.url()}` : `Juz na stronie formularza. URL: ${page.url()}`, screenshot));
 
       await delay(3000);
       screenshot = await takeScreenshot(page);
 
       // ===== KROK A: Formularz zgloszeniowy (strona 1) =====
-      // 1. Checkbox "Nie prowadze dzialalnosci gospodarczej..."
-      await page.evaluate(() => {
-        const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
-        for (const cb of cbs) { if (!cb.checked && !cb.disabled) cb.click(); }
-      });
-      await delay(500);
-
-      // 2. Select "Wybierz Rodzaj Wniosku" → "Mieszkam w województwie łódzkim"
-      const selectResult = await page.evaluate(() => {
+      // Dwa dropdowny: 1) "Nie prowadze dzialalnosci" 2) "Mieszkam w woj. lodzkim" + upload US PDF
+      // Must use page.select() for Blazor Server to register changes
+      const step1Selects = await page.evaluate(() => {
         const selects = Array.from(document.querySelectorAll("select"));
-        const filled: string[] = [];
-        for (const s of selects) {
-          const opts = Array.from((s as HTMLSelectElement).options);
-          const mieszkam = opts.find(o => o.text.toLowerCase().includes("mieszkam"));
-          if (mieszkam) {
-            (s as HTMLSelectElement).value = mieszkam.value;
-            s.dispatchEvent(new Event('change', { bubbles: true }));
-            filled.push("rodzaj_wniosku=mieszkam");
-          } else {
-            const nonEmpty = opts.filter(o => o.value && o.value !== "" && o.value !== "0");
-            if (nonEmpty.length > 0) {
-              (s as HTMLSelectElement).value = nonEmpty[0].value;
-              s.dispatchEvent(new Event('change', { bubbles: true }));
-              filled.push(`select=${nonEmpty[0].text.substring(0, 30)}`);
-            }
-          }
-        }
-        return filled;
+        return selects.map((s, i) => {
+          if (!s.id) s.id = `__step1_sel_${i}_${Date.now()}`;
+          const opts = Array.from((s as HTMLSelectElement).options).map(o => ({ value: o.value, text: o.text }));
+          return { id: s.id, opts: opts.filter(o => o.value && o.value !== "" && o.value !== "0") };
+        });
       });
-      await delay(1000);
-      addStep(log("formularz_zgloszeniowy", "ok",
-        `Checkbox zaznaczony, selecty: [${selectResult.join(", ")}]`, screenshot));
 
-      // 3. Upload Zaswiadczenie z US (PDF) - find file input
-      const dummyPdfPath = "/tmp/dummy_zaswiadczenie.pdf";
-      const fileInputs = await page.$$("input[type='file']");
-      if (fileInputs.length > 0) {
+      const step1Log: string[] = [];
+      for (let i = 0; i < step1Selects.length; i++) {
+        const sel = step1Selects[i];
+        if (sel.opts.length === 0) continue;
+        let chosen;
+        if (i === 0) {
+          chosen = sel.opts.find(o => o.text.toLowerCase().includes("nie prowadzę") || o.text.toLowerCase().includes("działalności")) || sel.opts[0];
+        } else {
+          chosen = sel.opts.find(o => o.text.toLowerCase().includes("mieszkam")) || sel.opts[0];
+        }
         try {
-          await fileInputs[0].uploadFile(dummyPdfPath);
+          await page.select(`#${sel.id}`, chosen.value);
+          step1Log.push(`${i === 0 ? "działalność" : "rodzaj"}=${chosen.text.substring(0, 40)}`);
+        } catch {
+          step1Log.push(`${i === 0 ? "działalność" : "rodzaj"}_error`);
+        }
+        await delay(1000);
+      }
+      addStep(log("formularz_zgloszeniowy_selecty", "ok",
+        `Dropdowny strona 1: [${step1Log.join(", ")}]`, screenshot));
+
+      // Upload Zaswiadczenie z US (PDF)
+      const dummyPdfPath = "/tmp/dummy_zaswiadczenie.pdf";
+      const fileInputsStep1 = await page.$$("input[type='file']");
+      if (fileInputsStep1.length > 0) {
+        try {
+          await fileInputsStep1[0].uploadFile(dummyPdfPath);
           await delay(2000);
-          addStep(log("upload_us", "ok", "Zaladowano plik PDF (zaswiadczenie US)"));
+          addStep(log("upload_us", "ok", "Zaladowano PDF (zaswiadczenie US)"));
         } catch (e: any) {
-          addStep(log("upload_us", "skip", `Nie udalo sie zaladowac pliku: ${e.message}`));
+          addStep(log("upload_us", "skip", `Upload US nieudany: ${e.message}`));
         }
       }
 
-      // 4. Click "Przejdź dalej" button
+      // Click "Przejdź dalej"
       const przejdzResult = await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
         for (const btn of btns) {
@@ -1359,83 +1391,112 @@ export async function runFstAutomationForParticipant(
       });
 
       if (przejdzResult.clicked) {
-        await delay(5000);
+        await delay(6000);
         screenshot = await takeScreenshot(page);
         addStep(log("przejdz_dalej", "ok",
           `Kliknieto "${przejdzResult.text}". URL: ${page.url()}`, screenshot));
       } else {
-        addStep(log("przejdz_dalej", "skip", "Nie znaleziono przycisku 'Przejdz dalej'"));
+        screenshot = await takeScreenshot(page);
+        addStep(log("przejdz_dalej", "error", `Nie znaleziono "Przejdz dalej". URL: ${page.url()}`, screenshot));
+        status = "error";
+        throw new Error("Brak przycisku Przejdz dalej");
       }
 
-      // ===== KROK B: Formularz glowny (po "Przejdz dalej") =====
+      // ===== KROK B: Formularz glowny =====
       await delay(3000);
 
-      // Parse address for fields
-      const adresParts = participant.adres.match(/^(.+?)\s+(\d+\S*)\s*(?:m\.?\s*|\/\s*)(\S+)?$/i);
-      const ulica = adresParts ? adresParts[1].replace(/^ul\.?\s*/i, "") : participant.adres.replace(/^ul\.?\s*/i, "");
-      const nrBudynku = adresParts ? adresParts[2] : "";
-      const nrMieszkania = adresParts && adresParts[3] ? adresParts[3] : "";
+      // Parse address: "ul. Traktorowa 89 m 11" → ulica="Traktorowa", numerDomu="89 m 11"
+      const adresMatch = participant.adres.match(/^ul\.?\s*(.+?)\s+(\d+.*)$/i);
+      const ulicaName = adresMatch ? adresMatch[1] : participant.adres.replace(/^ul\.?\s*/i, "");
+      const numerDomuLokalu = adresMatch ? adresMatch[2] : "";
 
-      // Fill dropdowns: Wojewodztwo, Powiat, Gmina, Miejscowosc
-      async function blazorSelectByText(page: Page, selectIndex: number, searchText: string) {
-        const result = await page.evaluate((idx, search) => {
+      // Helper: Blazor-compatible select - uses page.select() for proper change events
+      async function blazorSelectByIndex(page: Page, selectIndex: number, searchText: string, waitMs = 3000) {
+        const info = await page.evaluate((idx) => {
           const selects = Array.from(document.querySelectorAll("select"));
-          if (idx >= selects.length) return { ok: false, msg: `select[${idx}] nie istnieje (${selects.length} selectow)` };
+          if (idx >= selects.length) return { exists: false, id: "", optCount: 0, opts: [] as string[] };
           const s = selects[idx] as HTMLSelectElement;
-          const opts = Array.from(s.options);
-          const match = opts.find(o => o.text.toLowerCase().includes(search.toLowerCase()));
-          if (match) {
-            s.value = match.value;
-            s.dispatchEvent(new Event('change', { bubbles: true }));
-            return { ok: true, msg: `${match.text}` };
-          }
-          const first = opts.find(o => o.value && o.value !== "" && o.value !== "0");
-          if (first) {
-            s.value = first.value;
-            s.dispatchEvent(new Event('change', { bubbles: true }));
-            return { ok: true, msg: `fallback: ${first.text}` };
-          }
-          return { ok: false, msg: "brak opcji" };
-        }, selectIndex, searchText);
-        await delay(2000);
-        return result;
+          if (!s.id) s.id = `__blazor_sel_${idx}_${Date.now()}`;
+          const opts = Array.from(s.options).map(o => ({ value: o.value, text: o.text }));
+          return { exists: true, id: s.id, optCount: opts.length, opts: opts.filter(o => o.value && o.value !== "" && o.value !== "0") };
+        }, selectIndex);
+
+        if (!info.exists) return { ok: false, msg: `select[${selectIndex}] nie istnieje` };
+        if (info.opts.length === 0) return { ok: false, msg: `select[${selectIndex}] brak opcji (${info.optCount} total)` };
+
+        const match = info.opts.find(o => o.text.toLowerCase().includes(searchText.toLowerCase()));
+        const chosen = match || info.opts[0];
+        const label = match ? chosen.text : `fallback: ${chosen.text}`;
+
+        try {
+          await page.select(`#${info.id}`, chosen.value);
+          await page.evaluate((id) => {
+            const el = document.getElementById(id) as HTMLSelectElement;
+            if (el) {
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }, info.id);
+        } catch {
+          await page.evaluate((id, val) => {
+            const el = document.getElementById(id) as HTMLSelectElement;
+            if (el) {
+              el.value = val;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }, info.id, chosen.value);
+        }
+        await delay(waitMs);
+        return { ok: true, msg: label };
       }
 
-      const selectsFilled: string[] = [];
+      const addrLog: string[] = [];
 
-      // Wojewodztwo → ŁÓDZKIE
-      const woj = await blazorSelectByText(page, 0, "łódzkie");
-      selectsFilled.push(`woj: ${woj.msg}`);
+      // 1. Województwo (index 0) → ŁÓDZKIE  (wait 4s for Blazor to load next)
+      const woj = await blazorSelectByIndex(page, 0, "łódzkie", 5000);
+      addrLog.push(`woj: ${woj.msg}`);
 
-      // Wait for powiat dropdown to populate
-      await delay(3000);
-
-      // Powiat → depends on city
+      // 2. Powiat (index 1) → Łódź (wait for options to populate from Blazor)
       const powiatSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" :
                            participant.miasto.toLowerCase() === "maków" ? "skierniewi" : participant.miasto;
-      const pow = await blazorSelectByText(page, 1, powiatSearch);
-      selectsFilled.push(`powiat: ${pow.msg}`);
+      for (let retry = 0; retry < 3; retry++) {
+        const pow = await blazorSelectByIndex(page, 1, powiatSearch, 5000);
+        addrLog.push(`powiat: ${pow.msg}`);
+        if (pow.ok) break;
+        await delay(3000);
+      }
 
-      await delay(3000);
-
-      // Gmina
+      // 3. Gmina (index 2)
       const gminaSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto;
-      const gm = await blazorSelectByText(page, 2, gminaSearch);
-      selectsFilled.push(`gmina: ${gm.msg}`);
+      for (let retry = 0; retry < 3; retry++) {
+        const gm = await blazorSelectByIndex(page, 2, gminaSearch, 5000);
+        addrLog.push(`gmina: ${gm.msg}`);
+        if (gm.ok) break;
+        await delay(3000);
+      }
 
-      await delay(3000);
+      // 4. Miejscowość (index 3)
+      for (let retry = 0; retry < 3; retry++) {
+        const mc = await blazorSelectByIndex(page, 3, participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto, 5000);
+        addrLog.push(`miejscowosc: ${mc.msg}`);
+        if (mc.ok) break;
+        await delay(3000);
+      }
 
-      // Miejscowosc
-      const mc = await blazorSelectByText(page, 3, participant.miasto);
-      selectsFilled.push(`miejscowosc: ${mc.msg}`);
+      // 5. Ulica (index 4) → dropdown search by street name
+      for (let retry = 0; retry < 3; retry++) {
+        const ul = await blazorSelectByIndex(page, 4, ulicaName, 4000);
+        addrLog.push(`ulica: ${ul.msg}`);
+        if (ul.ok) break;
+        await delay(3000);
+      }
 
-      await delay(2000);
+      addStep(log("adres_selecty", "ok", `Adres: [${addrLog.join("; ")}]`));
 
-      addStep(log("adres_selecty", "ok", `Selecty adresowe: [${selectsFilled.join("; ")}]`));
-
-      // Fill text inputs: Ulica, Nr budynku, Nr mieszkania, Nr dowodu, Kod pocztowy
+      // Fill text inputs: Numer domu/lokalu, Kod pocztowy, Nazwa szkoły
       const textInputs = await page.$$("input[type='text']:not([readonly]):not([disabled])");
-      const textFieldsFilled: string[] = [];
+      const textLog: string[] = [];
 
       for (const inp of textInputs) {
         const attrs = await page.evaluate(el => ({
@@ -1443,111 +1504,183 @@ export async function runFstAutomationForParticipant(
           id: el.id || "",
           placeholder: el.placeholder || "",
           value: el.value || "",
-          label: (el.previousElementSibling?.textContent || el.closest(".form-group")?.querySelector("label")?.textContent || "").trim().toLowerCase(),
-          parentText: (el.parentElement?.textContent || "").toLowerCase().substring(0, 100),
+          parentText: (() => {
+            let node: Element | null = el;
+            let text = "";
+            for (let i = 0; i < 3 && node; i++) {
+              node = node.parentElement;
+              if (node) {
+                const label = node.querySelector("label, strong, b, h5, h6");
+                if (label) { text += " " + (label.textContent || ""); }
+              }
+            }
+            return (text + " " + (el.previousElementSibling?.textContent || "")).toLowerCase().substring(0, 200);
+          })(),
         }), inp);
 
         if (attrs.value) continue;
-
-        const allText = `${attrs.name} ${attrs.id} ${attrs.placeholder} ${attrs.label} ${attrs.parentText}`;
+        const allText = `${attrs.name} ${attrs.id} ${attrs.placeholder} ${attrs.parentText}`;
         const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
         if (!selector) continue;
 
         try {
-          if (allText.includes("ulic")) {
-            await blazorType(page, selector, ulica);
-            textFieldsFilled.push("ulica");
-          } else if (allText.includes("budyn") || allText.includes("nr b") || allText.includes("numer b")) {
-            await blazorType(page, selector, nrBudynku || "1");
-            textFieldsFilled.push("nr_budynku");
-          } else if (allText.includes("mieszk") || allText.includes("nr m") || allText.includes("lokal")) {
-            await blazorType(page, selector, nrMieszkania || "1");
-            textFieldsFilled.push("nr_mieszkania");
-          } else if (allText.includes("dowod") || allText.includes("dowód")) {
-            await blazorType(page, selector, "ABC123456");
-            textFieldsFilled.push("nr_dowodu");
+          if (allText.includes("numer dom") || allText.includes("domu") || allText.includes("lokalu") || allText.includes("nr dom") || allText.includes("budyn")) {
+            await blazorType(page, selector, numerDomuLokalu || "1");
+            textLog.push("numer_domu_lokalu");
           } else if (allText.includes("kod") || allText.includes("poczt")) {
             await blazorType(page, selector, participant.kodPocztowy);
-            textFieldsFilled.push("kod_pocztowy");
-          } else if (allText.includes("szkoł") || allText.includes("szkol") || allText.includes("uczelni") || allText.includes("nauk")) {
-            await blazorType(page, selector, "Szkoła w Łodzi");
-            textFieldsFilled.push("szkola");
+            textLog.push("kod_pocztowy");
+          } else if (allText.includes("szkoł") || allText.includes("szkol") || allText.includes("uczelni") || allText.includes("nauk") || allText.includes("pobierania")) {
+            await blazorType(page, selector, "Brak");
+            textLog.push("nazwa_szkoly");
           } else {
-            await blazorType(page, selector, "brak");
-            textFieldsFilled.push(`other:${attrs.name || attrs.id}`);
+            await blazorType(page, selector, "Brak");
+            textLog.push(`other:${attrs.name || attrs.id}`);
           }
         } catch {}
       }
 
-      addStep(log("formularz_pola_tekstowe", "ok",
-        `Wypelniono pola: [${textFieldsFilled.join(", ")}]`));
+      // Fill textareas ("Inne" → "Brak")
+      const textareas = await page.$$("textarea:not([readonly]):not([disabled])");
+      for (const ta of textareas) {
+        const hasValue = await page.evaluate(el => !!(el as HTMLTextAreaElement).value, ta);
+        if (!hasValue) {
+          try {
+            const taSelector = await page.evaluate(el => {
+              return el.name ? `textarea[name="${el.name}"]` : el.id ? `textarea#${el.id}` : null;
+            }, ta);
+            if (taSelector) {
+              await blazorType(page, taSelector, "Brak");
+              textLog.push("textarea_inne");
+            }
+          } catch {}
+        }
+      }
 
-      // Upload all file inputs (dane osobowe PDF, zaswiadczenie PUP, wyksztalcenie)
+      addStep(log("pola_tekstowe", "ok", `Pola: [${textLog.join(", ")}]`));
+
+      // Upload all file inputs (dane osobowe, zaswiadczenie PUP, wyksztalcenie)
       const allFileInputs = await page.$$("input[type='file']");
-      for (let fi = 0; fi < allFileInputs.length; fi++) {
+      let uploadCount = 0;
+      for (const fi of allFileInputs) {
         try {
-          await allFileInputs[fi].uploadFile(dummyPdfPath);
-          await delay(1500);
+          await fi.uploadFile(dummyPdfPath);
+          uploadCount++;
+          await delay(2000);
         } catch {}
       }
-      if (allFileInputs.length > 0) {
-        addStep(log("upload_dokumenty", "ok", `Zaladowano pliki do ${allFileInputs.length} pol`));
-      }
+      addStep(log("upload_dokumenty", "ok", `Zaladowano ${uploadCount}/${allFileInputs.length} plikow PDF`));
 
-      // Fill remaining selects (Status na rynku pracy, Wyksztalcenie, Niepelnosprawnosc)
-      const remainingSelects = await page.evaluate((notatkiRaw) => {
+      // Fill remaining selects using page.select() for Blazor compatibility
+      const selectsInfo = await page.evaluate((notatkiRaw) => {
         const selects = Array.from(document.querySelectorAll("select"));
-        const filled: string[] = [];
+        const toFill: { id: string; value: string; label: string }[] = [];
 
-        for (const s of selects) {
-          if ((s as HTMLSelectElement).value && (s as HTMLSelectElement).value !== "" && (s as HTMLSelectElement).value !== "0") continue;
-          const label = (s.previousElementSibling?.textContent || s.closest(".form-group")?.querySelector("label, h5, h6, strong")?.textContent || "").toLowerCase();
-          const opts = Array.from((s as HTMLSelectElement).options);
+        for (let i = 0; i < selects.length; i++) {
+          const s = selects[i] as HTMLSelectElement;
+          if (s.value && s.value !== "" && s.value !== "0") continue;
+          if (!s.id) s.id = `__blazor_status_${i}_${Date.now()}`;
+          const parent = s.closest(".form-group, .mb-3, .col, div") || s.parentElement;
+          const nearby = (parent?.textContent || "").toLowerCase().substring(0, 300);
+          const prevText = (s.previousElementSibling?.textContent || "").toLowerCase();
+          const labelText = `${nearby} ${prevText}`;
+          const opts = Array.from(s.options);
+          const notatki = notatkiRaw.toLowerCase();
 
-          if (label.includes("status") && label.includes("rynku pracy")) {
-            const bezrobotna = opts.find(o => o.text.toLowerCase().includes("bezrobotn") && o.text.toLowerCase().includes("pup"));
-            if (bezrobotna) { (s as HTMLSelectElement).value = bezrobotna.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`status_pracy=${bezrobotna.text.substring(0, 40)}`); }
-          } else if (label.includes("wykształcen") || label.includes("wyksztalcen")) {
-            const notatki = notatkiRaw.toLowerCase();
-            let match = null;
-            if (notatki.includes("zawodowe")) match = opts.find(o => o.text.toLowerCase().includes("zawodow"));
-            else if (notatki.includes("średnie niepełne") || notatki.includes("srednie niepelne")) match = opts.find(o => o.text.toLowerCase().includes("gimnazjaln"));
-            else if (notatki.includes("średnie") || notatki.includes("srednie")) match = opts.find(o => o.text.toLowerCase().includes("ponadgimnazjaln") || o.text.toLowerCase().includes("średni"));
-            if (match) { (s as HTMLSelectElement).value = match.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`wyksztalcenie=${match.text.substring(0, 40)}`); }
-            else {
-              const first = opts.find(o => o.value && o.value !== "" && o.value !== "0");
-              if (first) { (s as HTMLSelectElement).value = first.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`wyksztalcenie_fallback=${first.text.substring(0, 40)}`); }
-            }
-          } else if (label.includes("niepełnospraw") || label.includes("niepelnospraw")) {
-            const nie = opts.find(o => o.text.toLowerCase() === "nie");
-            if (nie) { (s as HTMLSelectElement).value = nie.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push("niepelnosprawnosc=Nie"); }
-          } else if (label.includes("mniejszoś") || label.includes("mniejszos") || label.includes("obcego") || label.includes("bezdomn") || label.includes("pomocy społ") || label.includes("państwa trzeciego")) {
-            const nie = opts.find(o => o.text.toLowerCase() === "nie");
-            if (nie) { (s as HTMLSelectElement).value = nie.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`${label.substring(0, 20)}=Nie`); }
+          let chosen: { value: string; text: string } | null = null;
+          let fieldName = "";
+
+          if (labelText.includes("rynku pracy") || labelText.includes("status wnioskodawcy na rynku")) {
+            fieldName = "status_pracy";
+            if (notatki.includes("zatrudnion")) chosen = opts.find(o => o.text.toLowerCase().includes("zatrudnion")) || null;
+            if (!chosen && (notatki.includes("bezrobotn") || notatki.includes("zarejestrowana w pup") || notatki.includes("zarejestrowana w up")))
+              chosen = opts.find(o => o.text.toLowerCase().includes("bezrobotn") && o.text.toLowerCase().includes("pup")) || null;
+            if (!chosen) chosen = opts.find(o => o.text.toLowerCase().includes("bezrobotn")) || null;
+          } else if (labelText.includes("wykształcen") || labelText.includes("wyksztalcen") || labelText.includes("isced")) {
+            fieldName = "wyksztalcenie";
+            if (notatki.includes("brak formal")) chosen = opts.find(o => o.text.toLowerCase().includes("isced 0") || o.text.toLowerCase().includes("brak")) || null;
+            else if (notatki.includes("zawodowe")) chosen = opts.find(o => o.text.toLowerCase().includes("zawodow")) || null;
+            else if (notatki.includes("średnie niepełne") || notatki.includes("srednie niepelne")) chosen = opts.find(o => o.text.toLowerCase().includes("gimnazjaln")) || null;
+            else if (notatki.includes("średnie") || notatki.includes("srednie")) chosen = opts.find(o => o.text.toLowerCase().includes("ponadgimnazjaln") || o.text.toLowerCase().includes("isced 3")) || null;
+            if (!chosen) chosen = opts.find(o => o.text.toLowerCase().includes("isced 0") || o.text.toLowerCase().includes("brak")) || null;
+          } else if (labelText.includes("niepełnospraw") || labelText.includes("niepelnospraw")) {
+            fieldName = "niepelnosprawnosc";
+            chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+          } else if (labelText.includes("mniejszoś") || labelText.includes("mniejszos") || labelText.includes("etniczn")) {
+            fieldName = "mniejszosc";
+            chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+          } else if (labelText.includes("obcego pochodzen")) {
+            fieldName = "obce_pochodzenie";
+            chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+          } else if (labelText.includes("bezdomn") || labelText.includes("wykluczeni")) {
+            fieldName = "bezdomnosc";
+            chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+          } else if (labelText.includes("pomocy społ") || labelText.includes("pomocy spol") || labelText.includes("świadczeń pomocy")) {
+            fieldName = "pomoc_spol";
+            chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
           } else {
+            fieldName = `other_${i}`;
             const nonEmpty = opts.filter(o => o.value && o.value !== "" && o.value !== "0");
-            if (nonEmpty.length > 0) {
-              (s as HTMLSelectElement).value = nonEmpty[0].value;
-              s.dispatchEvent(new Event('change', { bubbles: true }));
-              filled.push(`unknown_select=${nonEmpty[0].text.substring(0, 30)}`);
-            }
+            if (nonEmpty.length > 0) chosen = nonEmpty[0];
+          }
+
+          if (chosen) {
+            toFill.push({ id: s.id, value: chosen.value, label: `${fieldName}=${chosen.text.substring(0, 50)}` });
           }
         }
-        return filled;
+        return toFill;
       }, participant.notatki || "");
 
-      addStep(log("formularz_selecty", "ok", `Selecty: [${remainingSelects.join("; ")}]`));
+      const selectsLog: string[] = [];
+      for (const sf of selectsInfo) {
+        try {
+          await page.select(`#${sf.id}`, sf.value);
+          await page.evaluate((id) => {
+            const el = document.getElementById(id) as HTMLSelectElement;
+            if (el) {
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }, sf.id);
+          selectsLog.push(sf.label);
+        } catch {
+          await page.evaluate((id, val) => {
+            const el = document.getElementById(id) as HTMLSelectElement;
+            if (el) { el.value = val; el.dispatchEvent(new Event('change', { bubbles: true })); }
+          }, sf.id, sf.value);
+          selectsLog.push(sf.label);
+        }
+        await delay(500);
+      }
 
-      // Check all checkboxes (oświadczenia, specjalne potrzeby, etc.)
+      addStep(log("selecty_statusy", "ok", `Selecty: [${selectsLog.join("; ")}]`));
+
+      // Checkboxes - SELECTIVE: only specific ones should be checked
       await page.evaluate(() => {
         const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
         for (const cb of cbs) {
-          if (!cb.checked && !cb.disabled) cb.click();
+          if (cb.checked || cb.disabled) continue;
+          const parent = cb.closest(".form-group, .mb-3, div, label") || cb.parentElement;
+          const labelText = (parent?.textContent || "").toLowerCase();
+
+          const shouldCheck =
+            labelText.includes("nie potrzebuję") ||
+            labelText.includes("nie potrzebuje") ||
+            labelText.includes("dostępnościow") ||
+            labelText.includes("zainteresowany") ||
+            labelText.includes("doradztw") ||
+            labelText.includes("doradcy zawodowego") ||
+            labelText.includes("akceptuję") ||
+            labelText.includes("akceptuje") ||
+            labelText.includes("oświadczen") ||
+            labelText.includes("oswiadczen");
+
+          if (shouldCheck) cb.click();
         }
       });
       await delay(1000);
 
-      // Scroll down to make sure all content is visible
+      // Scroll to bottom
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await delay(2000);
 
@@ -1555,9 +1688,8 @@ export async function runFstAutomationForParticipant(
       addStep(log("formularz_gotowy", "ok", `Formularz wypelniony. URL: ${page.url()}`, screenshot));
 
       if (autoSubmit) {
-        // Click "Złóż wniosek" at the bottom of the form
         const submitResult = await page.evaluate(() => {
-          const keywords = ["złóż wniosek", "wyślij", "zapisz", "zatwierdź", "submit", "złóż"];
+          const keywords = ["złóż wniosek", "wyślij", "zapisz", "zatwierdź"];
           const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
           for (const btn of btns) {
             const t = (btn.textContent || "").trim().toLowerCase();
