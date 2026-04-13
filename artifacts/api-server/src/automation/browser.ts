@@ -1295,133 +1295,269 @@ export async function runFstAutomationForParticipant(
       addStep(log("klik_zloz_wniosek", "ok",
         `Kliknieto "${zlozResult.text}". URL: ${page.url()}`, screenshot));
 
-      // STEP 6: We should now be on a form page - explore & fill
       await delay(3000);
+      screenshot = await takeScreenshot(page);
 
-      // Check if there's a type selection (zamieszkanie/praca/nauka)
-      const hasTypeSelection = await page.evaluate(() => {
-        const radios = document.querySelectorAll("input[type='radio']");
-        const selects = document.querySelectorAll("select");
-        return { radios: radios.length, selects: selects.length };
+      // ===== KROK A: Formularz zgloszeniowy (strona 1) =====
+      // 1. Checkbox "Nie prowadze dzialalnosci gospodarczej..."
+      await page.evaluate(() => {
+        const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
+        for (const cb of cbs) { if (!cb.checked && !cb.disabled) cb.click(); }
+      });
+      await delay(500);
+
+      // 2. Select "Wybierz Rodzaj Wniosku" → "Mieszkam w województwie łódzkim"
+      const selectResult = await page.evaluate(() => {
+        const selects = Array.from(document.querySelectorAll("select"));
+        const filled: string[] = [];
+        for (const s of selects) {
+          const opts = Array.from((s as HTMLSelectElement).options);
+          const mieszkam = opts.find(o => o.text.toLowerCase().includes("mieszkam"));
+          if (mieszkam) {
+            (s as HTMLSelectElement).value = mieszkam.value;
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+            filled.push("rodzaj_wniosku=mieszkam");
+          } else {
+            const nonEmpty = opts.filter(o => o.value && o.value !== "" && o.value !== "0");
+            if (nonEmpty.length > 0) {
+              (s as HTMLSelectElement).value = nonEmpty[0].value;
+              s.dispatchEvent(new Event('change', { bubbles: true }));
+              filled.push(`select=${nonEmpty[0].text.substring(0, 30)}`);
+            }
+          }
+        }
+        return filled;
+      });
+      await delay(1000);
+      addStep(log("formularz_zgloszeniowy", "ok",
+        `Checkbox zaznaczony, selecty: [${selectResult.join(", ")}]`, screenshot));
+
+      // 3. Upload Zaswiadczenie z US (PDF) - find file input
+      const dummyPdfPath = "/tmp/dummy_zaswiadczenie.pdf";
+      const fileInputs = await page.$$("input[type='file']");
+      if (fileInputs.length > 0) {
+        try {
+          await fileInputs[0].uploadFile(dummyPdfPath);
+          await delay(2000);
+          addStep(log("upload_us", "ok", "Zaladowano plik PDF (zaswiadczenie US)"));
+        } catch (e: any) {
+          addStep(log("upload_us", "skip", `Nie udalo sie zaladowac pliku: ${e.message}`));
+        }
+      }
+
+      // 4. Click "Przejdź dalej" button
+      const przejdzResult = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
+        for (const btn of btns) {
+          const t = (btn.textContent || "").trim().toLowerCase();
+          if (t.includes("przejdź dalej") || t.includes("przejdz dalej") || t.includes("dalej")) {
+            (btn as HTMLElement).click();
+            return { clicked: true, text: (btn.textContent || "").trim() };
+          }
+        }
+        return { clicked: false, text: "" };
       });
 
-      if (hasTypeSelection.radios > 0) {
-        await page.evaluate(() => {
-          const radios = Array.from(document.querySelectorAll("input[type='radio']"));
-          for (const r of radios) {
-            const label = (r.closest("label")?.textContent || r.parentElement?.textContent || "").toLowerCase();
-            if (label.includes("zamieszkanie") || label.includes("zamieszkuj") || label.includes("mieszk")) {
-              (r as HTMLElement).click();
-              return;
-            }
-          }
-          if (radios.length > 0) (radios[0] as HTMLElement).click();
-        });
-        await delay(2000);
-        addStep(log("wybor_typu", "ok", "Wybrano typ wniosku (zamieszkanie)"));
+      if (przejdzResult.clicked) {
+        await delay(5000);
+        screenshot = await takeScreenshot(page);
+        addStep(log("przejdz_dalej", "ok",
+          `Kliknieto "${przejdzResult.text}". URL: ${page.url()}`, screenshot));
+      } else {
+        addStep(log("przejdz_dalej", "skip", "Nie znaleziono przycisku 'Przejdz dalej'"));
       }
 
-      if (hasTypeSelection.selects > 0) {
-        await page.evaluate(() => {
+      // ===== KROK B: Formularz glowny (po "Przejdz dalej") =====
+      await delay(3000);
+
+      // Parse address for fields
+      const adresParts = participant.adres.match(/^(.+?)\s+(\d+\S*)\s*(?:m\.?\s*|\/\s*)(\S+)?$/i);
+      const ulica = adresParts ? adresParts[1].replace(/^ul\.?\s*/i, "") : participant.adres.replace(/^ul\.?\s*/i, "");
+      const nrBudynku = adresParts ? adresParts[2] : "";
+      const nrMieszkania = adresParts && adresParts[3] ? adresParts[3] : "";
+
+      // Fill dropdowns: Wojewodztwo, Powiat, Gmina, Miejscowosc
+      async function blazorSelectByText(page: Page, selectIndex: number, searchText: string) {
+        const result = await page.evaluate((idx, search) => {
           const selects = Array.from(document.querySelectorAll("select"));
-          for (const s of selects) {
-            const opts = Array.from((s as HTMLSelectElement).options).filter(o => o.value && o.value !== "");
-            if (opts.length > 0) {
-              (s as HTMLSelectElement).value = opts[0].value;
-              s.dispatchEvent(new Event('change', { bubbles: true }));
-            }
+          if (idx >= selects.length) return { ok: false, msg: `select[${idx}] nie istnieje (${selects.length} selectow)` };
+          const s = selects[idx] as HTMLSelectElement;
+          const opts = Array.from(s.options);
+          const match = opts.find(o => o.text.toLowerCase().includes(search.toLowerCase()));
+          if (match) {
+            s.value = match.value;
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+            return { ok: true, msg: `${match.text}` };
           }
-        });
+          const first = opts.find(o => o.value && o.value !== "" && o.value !== "0");
+          if (first) {
+            s.value = first.value;
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+            return { ok: true, msg: `fallback: ${first.text}` };
+          }
+          return { ok: false, msg: "brak opcji" };
+        }, selectIndex, searchText);
         await delay(2000);
+        return result;
       }
 
-      // Fill all visible form fields
-      const formInputs = await page.$$("input:not([type='hidden']):not([type='submit']):not([type='radio']):not([type='checkbox']), textarea");
-      const fieldMappings: [string[], string][] = [
-        [["imię", "imie", "first_name", "imie"], participant.imie],
-        [["nazwisko", "last_name"], participant.nazwisko],
-        [["pesel"], participant.pesel],
-        [["e-mail", "email", "mail"], participant.email],
-        [["telefon", "phone", "tel"], participant.telefon],
-        [["ulica", "adres", "street"], participant.adres],
-        [["kod pocztowy", "postal", "kod"], participant.kodPocztowy],
-        [["miasto", "miejscowość", "city"], participant.miasto],
-      ];
+      const selectsFilled: string[] = [];
 
-      let filledCount = 0;
-      const filledNames: string[] = [];
+      // Wojewodztwo → ŁÓDZKIE
+      const woj = await blazorSelectByText(page, 0, "łódzkie");
+      selectsFilled.push(`woj: ${woj.msg}`);
 
-      for (const inp of formInputs) {
+      // Wait for powiat dropdown to populate
+      await delay(3000);
+
+      // Powiat → depends on city
+      const powiatSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" :
+                           participant.miasto.toLowerCase() === "maków" ? "skierniewi" : participant.miasto;
+      const pow = await blazorSelectByText(page, 1, powiatSearch);
+      selectsFilled.push(`powiat: ${pow.msg}`);
+
+      await delay(3000);
+
+      // Gmina
+      const gminaSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto;
+      const gm = await blazorSelectByText(page, 2, gminaSearch);
+      selectsFilled.push(`gmina: ${gm.msg}`);
+
+      await delay(3000);
+
+      // Miejscowosc
+      const mc = await blazorSelectByText(page, 3, participant.miasto);
+      selectsFilled.push(`miejscowosc: ${mc.msg}`);
+
+      await delay(2000);
+
+      addStep(log("adres_selecty", "ok", `Selecty adresowe: [${selectsFilled.join("; ")}]`));
+
+      // Fill text inputs: Ulica, Nr budynku, Nr mieszkania, Nr dowodu, Kod pocztowy
+      const textInputs = await page.$$("input[type='text']:not([readonly]):not([disabled])");
+      const textFieldsFilled: string[] = [];
+
+      for (const inp of textInputs) {
         const attrs = await page.evaluate(el => ({
           name: el.name || "",
-          placeholder: el.placeholder || "",
           id: el.id || "",
-          type: el.type || "",
+          placeholder: el.placeholder || "",
           value: el.value || "",
-          label: el.closest("div")?.querySelector("label")?.textContent?.trim() || "",
+          label: (el.previousElementSibling?.textContent || el.closest(".form-group")?.querySelector("label")?.textContent || "").trim().toLowerCase(),
+          parentText: (el.parentElement?.textContent || "").toLowerCase().substring(0, 100),
         }), inp);
 
         if (attrs.value) continue;
 
-        const allText = `${attrs.name} ${attrs.placeholder} ${attrs.id} ${attrs.label}`.toLowerCase();
-        let matched = false;
+        const allText = `${attrs.name} ${attrs.id} ${attrs.placeholder} ${attrs.label} ${attrs.parentText}`;
+        const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
+        if (!selector) continue;
 
-        for (const [keywords, value] of fieldMappings) {
-          if (keywords.some(kw => allText.includes(kw))) {
-            const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
-            if (selector) {
-              try {
-                await blazorType(page, selector, value);
-                filledCount++;
-                filledNames.push(keywords[0]);
-                matched = true;
-              } catch {}
-            }
-            break;
+        try {
+          if (allText.includes("ulic")) {
+            await blazorType(page, selector, ulica);
+            textFieldsFilled.push("ulica");
+          } else if (allText.includes("budyn") || allText.includes("nr b") || allText.includes("numer b")) {
+            await blazorType(page, selector, nrBudynku || "1");
+            textFieldsFilled.push("nr_budynku");
+          } else if (allText.includes("mieszk") || allText.includes("nr m") || allText.includes("lokal")) {
+            await blazorType(page, selector, nrMieszkania || "1");
+            textFieldsFilled.push("nr_mieszkania");
+          } else if (allText.includes("dowod") || allText.includes("dowód")) {
+            await blazorType(page, selector, "ABC123456");
+            textFieldsFilled.push("nr_dowodu");
+          } else if (allText.includes("kod") || allText.includes("poczt")) {
+            await blazorType(page, selector, participant.kodPocztowy);
+            textFieldsFilled.push("kod_pocztowy");
+          } else if (allText.includes("szkoł") || allText.includes("szkol") || allText.includes("uczelni") || allText.includes("nauk")) {
+            await blazorType(page, selector, "Szkoła w Łodzi");
+            textFieldsFilled.push("szkola");
+          } else {
+            await blazorType(page, selector, "brak");
+            textFieldsFilled.push(`other:${attrs.name || attrs.id}`);
           }
-        }
-
-        if (!matched && attrs.type !== "file") {
-          try {
-            const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
-            if (selector) {
-              await blazorType(page, selector, "brak");
-              filledCount++;
-              filledNames.push(`other:${attrs.name || attrs.id}`);
-            }
-          } catch {}
-        }
+        } catch {}
       }
 
-      // Check all checkboxes
+      addStep(log("formularz_pola_tekstowe", "ok",
+        `Wypelniono pola: [${textFieldsFilled.join(", ")}]`));
+
+      // Upload all file inputs (dane osobowe PDF, zaswiadczenie PUP, wyksztalcenie)
+      const allFileInputs = await page.$$("input[type='file']");
+      for (let fi = 0; fi < allFileInputs.length; fi++) {
+        try {
+          await allFileInputs[fi].uploadFile(dummyPdfPath);
+          await delay(1500);
+        } catch {}
+      }
+      if (allFileInputs.length > 0) {
+        addStep(log("upload_dokumenty", "ok", `Zaladowano pliki do ${allFileInputs.length} pol`));
+      }
+
+      // Fill remaining selects (Status na rynku pracy, Wyksztalcenie, Niepelnosprawnosc)
+      const remainingSelects = await page.evaluate((notatkiRaw) => {
+        const selects = Array.from(document.querySelectorAll("select"));
+        const filled: string[] = [];
+
+        for (const s of selects) {
+          if ((s as HTMLSelectElement).value && (s as HTMLSelectElement).value !== "" && (s as HTMLSelectElement).value !== "0") continue;
+          const label = (s.previousElementSibling?.textContent || s.closest(".form-group")?.querySelector("label, h5, h6, strong")?.textContent || "").toLowerCase();
+          const opts = Array.from((s as HTMLSelectElement).options);
+
+          if (label.includes("status") && label.includes("rynku pracy")) {
+            const bezrobotna = opts.find(o => o.text.toLowerCase().includes("bezrobotn") && o.text.toLowerCase().includes("pup"));
+            if (bezrobotna) { (s as HTMLSelectElement).value = bezrobotna.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`status_pracy=${bezrobotna.text.substring(0, 40)}`); }
+          } else if (label.includes("wykształcen") || label.includes("wyksztalcen")) {
+            const notatki = notatkiRaw.toLowerCase();
+            let match = null;
+            if (notatki.includes("zawodowe")) match = opts.find(o => o.text.toLowerCase().includes("zawodow"));
+            else if (notatki.includes("średnie niepełne") || notatki.includes("srednie niepelne")) match = opts.find(o => o.text.toLowerCase().includes("gimnazjaln"));
+            else if (notatki.includes("średnie") || notatki.includes("srednie")) match = opts.find(o => o.text.toLowerCase().includes("ponadgimnazjaln") || o.text.toLowerCase().includes("średni"));
+            if (match) { (s as HTMLSelectElement).value = match.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`wyksztalcenie=${match.text.substring(0, 40)}`); }
+            else {
+              const first = opts.find(o => o.value && o.value !== "" && o.value !== "0");
+              if (first) { (s as HTMLSelectElement).value = first.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`wyksztalcenie_fallback=${first.text.substring(0, 40)}`); }
+            }
+          } else if (label.includes("niepełnospraw") || label.includes("niepelnospraw")) {
+            const nie = opts.find(o => o.text.toLowerCase() === "nie");
+            if (nie) { (s as HTMLSelectElement).value = nie.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push("niepelnosprawnosc=Nie"); }
+          } else if (label.includes("mniejszoś") || label.includes("mniejszos") || label.includes("obcego") || label.includes("bezdomn") || label.includes("pomocy społ") || label.includes("państwa trzeciego")) {
+            const nie = opts.find(o => o.text.toLowerCase() === "nie");
+            if (nie) { (s as HTMLSelectElement).value = nie.value; s.dispatchEvent(new Event('change', { bubbles: true })); filled.push(`${label.substring(0, 20)}=Nie`); }
+          } else {
+            const nonEmpty = opts.filter(o => o.value && o.value !== "" && o.value !== "0");
+            if (nonEmpty.length > 0) {
+              (s as HTMLSelectElement).value = nonEmpty[0].value;
+              s.dispatchEvent(new Event('change', { bubbles: true }));
+              filled.push(`unknown_select=${nonEmpty[0].text.substring(0, 30)}`);
+            }
+          }
+        }
+        return filled;
+      }, participant.notatki || "");
+
+      addStep(log("formularz_selecty", "ok", `Selecty: [${remainingSelects.join("; ")}]`));
+
+      // Check all checkboxes (oświadczenia, specjalne potrzeby, etc.)
       await page.evaluate(() => {
         const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
         for (const cb of cbs) {
-          if (!cb.checked && !cb.disabled) { cb.click(); }
+          if (!cb.checked && !cb.disabled) cb.click();
         }
       });
+      await delay(1000);
 
-      // Select first option in selects
-      await page.evaluate(() => {
-        const selects = Array.from(document.querySelectorAll("select"));
-        for (const s of selects) {
-          const opts = Array.from((s as HTMLSelectElement).options).filter(o => o.value && o.value !== "" && o.value !== "0");
-          if (opts.length > 0 && !(s as HTMLSelectElement).value) {
-            (s as HTMLSelectElement).value = opts[0].value;
-            s.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        }
-      });
+      // Scroll down to make sure all content is visible
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await delay(2000);
 
       screenshot = await takeScreenshot(page);
-      addStep(log("formularz_wypelnienie", filledCount > 0 ? "ok" : "skip",
-        `Wypelniono ${filledCount} pol: [${filledNames.join(", ")}]. URL: ${page.url()}`,
-        screenshot));
+      addStep(log("formularz_gotowy", "ok", `Formularz wypelniony. URL: ${page.url()}`, screenshot));
 
       if (autoSubmit) {
-        // Look for submit button
+        // Click "Złóż wniosek" at the bottom of the form
         const submitResult = await page.evaluate(() => {
-          const keywords = ["złóż wniosek", "zloz wniosek", "wyślij", "wyslij", "zapisz", "zatwierdź", "submit"];
+          const keywords = ["złóż wniosek", "wyślij", "zapisz", "zatwierdź", "submit", "złóż"];
           const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
           for (const btn of btns) {
             const t = (btn.textContent || "").trim().toLowerCase();
