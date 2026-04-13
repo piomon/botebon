@@ -600,9 +600,22 @@ export default function Simulation() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm">
-                <strong>UWAGA:</strong> Kliknij dopiero gdy nabor sie otworzy! Wszystkie zalogowane przegladarki
-                jednoczesnie zaczna wypelniac i skladac wnioski. Gotowych sesji: <strong>{readySessions.length}</strong>.
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm space-y-2">
+                <p><strong>UWAGA:</strong> Kliknij dopiero gdy nabor sie otworzy (9:00)! Gotowych sesji: <strong>{readySessions.length}</strong>.</p>
+                <p className="font-medium">Co bot zrobi po kliknieciu:</p>
+                <ol className="list-decimal list-inside space-y-1 text-xs ml-2">
+                  <li>Wejdzie na strone naboru i kliknie "Zloz wniosek"</li>
+                  <li>Krok 1: Wybierze "Nie prowadze dzialalnosci" + "Mieszkam w woj. lodzkim"</li>
+                  <li>Krok 1: Wgra PDF (Dok2.pdf) jako zaswiadczenie US</li>
+                  <li>Kliknie "Przejdz dalej"</li>
+                  <li>Krok 2: Wypelni adres (woj/pow/gm/mc/ulica/nr domu/kod pocztowy)</li>
+                  <li>Krok 2: Wgra PDF na kazde pole uploadu</li>
+                  <li>Krok 2: Wybierze status rynku pracy i wyksztalcenie (z notatek uczestnika)</li>
+                  <li>Krok 2: Zaznaczy wymagane checkboxy (akceptuję, oświadczenia, doradztwo)</li>
+                  <li>Krok 2: Sprawdzi wszystkie pola — puste wypelni "Brak"</li>
+                  <li><strong>Kliknie "Zloz wniosek"</strong> i potwierdzi wyslanie</li>
+                </ol>
+                <p className="text-xs">Na kazdym kroku bot robi screenshot — zobaczysz dokladnie co zrobil.</p>
               </div>
 
               <div className="flex flex-wrap gap-3">
@@ -632,13 +645,14 @@ export default function Simulation() {
           <Card className="border-green-200">
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <ImageIcon className="h-5 w-5 text-green-600" /> Podglad formularza FST (dry run)
+                <ImageIcon className="h-5 w-5 text-green-600" /> Test logowania FST
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm">
-                Loguje uczestnika, wypelnia caly formularz, robi screenshoty na kazdym kroku — ale <strong>NIE klika "Zloz wniosek"</strong>. 
-                Mozesz zobaczyc dokladnie co bot wpisze dla kazdego uczestnika.
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm space-y-2">
+                <p>Sprawdza czy bot moze sie <strong>zalogowac</strong> na portal FST i wejsc na strone naborow.</p>
+                <p>Jesli nabor jest <strong>otwarty</strong> — bot wypelni caly formularz, zrobi screenshoty z kazdego kroku, ale <strong>NIE kliknie "Zloz wniosek"</strong>.</p>
+                <p>Jesli nabor jest <strong>zamkniety</strong> — bot zaloguje sie i pokaze ze formularz jeszcze nie jest dostepny (status: "Nabor zamkniety").</p>
               </div>
               <div className="border rounded-lg p-4 space-y-3">
                 <Select value={selectedParticipantId} onValueChange={setSelectedParticipantId}>
@@ -658,9 +672,9 @@ export default function Simulation() {
                 </Select>
                 <Button onClick={runFstDryRun} disabled={dryRunning || !selectedParticipantId} className="w-full bg-green-600 hover:bg-green-700">
                   {dryRunning ? (
-                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Logowanie i wypelnianie...</>
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sprawdzam...</>
                   ) : (
-                    <><ImageIcon className="mr-2 h-4 w-4" /> Podglad — wypelnij bez wysylania</>
+                    <><ImageIcon className="mr-2 h-4 w-4" /> Uruchom test</>
                   )}
                 </Button>
               </div>
@@ -671,8 +685,8 @@ export default function Simulation() {
             <Card className="border-green-200">
               <CardContent className="pt-6 flex flex-col items-center justify-center gap-3 py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-green-600" />
-                <span className="text-muted-foreground font-medium">Bot loguje sie i wypelnia formularz...</span>
-                <span className="text-xs text-muted-foreground">To moze potrwac ~60 sekund</span>
+                <span className="text-muted-foreground font-medium">Bot loguje sie na portal FST...</span>
+                <span className="text-xs text-muted-foreground">To moze potrwac ~30 sekund</span>
               </CardContent>
             </Card>
           )}
