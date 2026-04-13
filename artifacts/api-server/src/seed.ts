@@ -15,6 +15,7 @@ const SEED_DATA = [
     loginPortal: "Karolinaczubinska6@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
@@ -29,6 +30,7 @@ const SEED_DATA = [
     loginPortal: "Bizewskaania080@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
@@ -43,6 +45,7 @@ const SEED_DATA = [
     loginPortal: "justynaj957@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
@@ -57,6 +60,7 @@ const SEED_DATA = [
     loginPortal: "m.saanndra@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
@@ -71,6 +75,7 @@ const SEED_DATA = [
     loginPortal: "Balejaaldona7@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
@@ -85,6 +90,7 @@ const SEED_DATA = [
     loginPortal: "Izabelabaszczynska38@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
@@ -99,20 +105,22 @@ const SEED_DATA = [
     loginPortal: "Gosiaswiderek46@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
     imie: "Sandra",
     nazwisko: "Baleja",
     pesel: "88050605703",
-    email: "Akademiasandrabaleja@gmail.com",
+    email: "balejasandra@gmail.com",
     telefon: "500592850",
     adres: "ul. Traktorowa 89 m 11",
     kodPocztowy: "91-203",
     miasto: "Łódź",
-    loginPortal: "Akademiasandrabaleja@gmail.com",
+    loginPortal: "balejasandra@gmail.com",
     haslo: "Diana1988@",
     notatki: "bezrobotna zarejestrowana w UP; wykształcenie średnie; nieprowadząca działalności",
+    portal: "ebon",
     validationStatus: "ok" as const,
   },
   {
@@ -127,6 +135,7 @@ const SEED_DATA = [
     loginPortal: "dominikaaa9191@gmail.com",
     haslo: "Qwerty123!!!",
     notatki: "wykształcenie zawodowe; zarejestrowana w PUP; nieprowadząca działalności",
+    portal: "fst",
     validationStatus: "ok" as const,
   },
   {
@@ -141,6 +150,7 @@ const SEED_DATA = [
     loginPortal: "Monika.sobiegraj92@interia.pl",
     haslo: "Qwerty123!!!",
     notatki: "wykształcenie średnie niepełne; zarejestrowana w PUP; nieprowadząca działalności",
+    portal: "fst",
     validationStatus: "ok" as const,
   },
   {
@@ -155,6 +165,7 @@ const SEED_DATA = [
     loginPortal: "Ewelina.wisniewska99@interia.pl",
     haslo: "Qwerty123!!!",
     notatki: "wykształcenie średnie; zarejestrowana w PUP; nieprowadząca działalności",
+    portal: "fst",
     validationStatus: "ok" as const,
   },
 ];

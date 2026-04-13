@@ -30,6 +30,7 @@ export const ListParticipantsResponseItem = zod.object({
   loginPortal: zod.string(),
   haslo: zod.string(),
   notatki: zod.string().nullish(),
+  portal: zod.string().nullish(),
   validationStatus: zod.string().nullish(),
   createdAt: zod.coerce.date(),
 });
@@ -72,6 +73,7 @@ export const GetParticipantResponse = zod.object({
   loginPortal: zod.string(),
   haslo: zod.string(),
   notatki: zod.string().nullish(),
+  portal: zod.string().nullish(),
   validationStatus: zod.string().nullish(),
   createdAt: zod.coerce.date(),
 });
@@ -95,6 +97,7 @@ export const UpdateParticipantBody = zod.object({
   loginPortal: zod.string().optional(),
   haslo: zod.string().optional(),
   notatki: zod.string().nullish(),
+  portal: zod.string().nullish(),
 });
 
 export const UpdateParticipantResponse = zod.object({
@@ -110,6 +113,7 @@ export const UpdateParticipantResponse = zod.object({
   loginPortal: zod.string(),
   haslo: zod.string(),
   notatki: zod.string().nullish(),
+  portal: zod.string().nullish(),
   validationStatus: zod.string().nullish(),
   createdAt: zod.coerce.date(),
 });

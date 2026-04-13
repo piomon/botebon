@@ -83,7 +83,8 @@ router.post("/automation/run-single/:id", async (req, res): Promise<void> => {
 router.post("/automation/run-all", async (req, res): Promise<void> => {
   const portal: PortalType = req.body?.portal === "fst" ? "fst" : "ebon";
   const jobId = `job_${Date.now()}`;
-  const participants = await db.select().from(participantsTable).orderBy(participantsTable.id);
+  const allParticipants = await db.select().from(participantsTable).orderBy(participantsTable.id);
+  const participants = allParticipants.filter(p => (p.portal || "ebon") === portal);
 
   const job = {
     status: "running" as const,
@@ -171,12 +172,15 @@ router.post("/automation/run-single-sync/:id", async (req, res): Promise<void> =
   }
 
   try {
-    const result = await runAutomationForParticipant(participant as any);
+    const participantPortal = (participant as any).portal || "ebon";
+    const result = participantPortal === "fst"
+      ? await runFstAutomationForParticipant(participant as any)
+      : await runAutomationForParticipant(participant as any);
 
     await db.insert(operationsTable).values({
       operationType: "automation",
       status: result.status === "error" ? "errors" : "ok",
-      summary: `Automatyzacja: ${participant.imie} ${participant.nazwisko} — ${result.status}, ${result.steps.length} krokow`,
+      summary: `Automatyzacja (${participantPortal.toUpperCase()}): ${participant.imie} ${participant.nazwisko} — ${result.status}, ${result.steps.length} krokow`,
       resultData: JSON.stringify(result),
     });
 

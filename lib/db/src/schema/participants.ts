@@ -15,6 +15,7 @@ export const participantsTable = pgTable("participants", {
   loginPortal: text("login_portal").notNull(),
   haslo: text("haslo").notNull(),
   notatki: text("notatki"),
+  portal: text("portal").default("ebon"),
   validationStatus: text("validation_status"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

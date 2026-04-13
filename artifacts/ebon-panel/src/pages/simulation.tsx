@@ -248,7 +248,7 @@ export default function Simulation() {
               <Button
                 variant={portal === "ebon" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setPortal("ebon")}
+                onClick={() => { setPortal("ebon"); setSelectedParticipantId(""); }}
                 disabled={running}
                 className={portal === "ebon" ? "bg-blue-600 hover:bg-blue-700" : ""}
               >
@@ -257,7 +257,7 @@ export default function Simulation() {
               <Button
                 variant={portal === "fst" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setPortal("fst")}
+                onClick={() => { setPortal("fst"); setSelectedParticipantId(""); }}
                 disabled={running}
                 className={portal === "fst" ? "bg-purple-600 hover:bg-purple-700" : ""}
               >
@@ -319,8 +319,8 @@ export default function Simulation() {
                 <Users className="h-5 w-5 text-purple-600" />
                 <span className="font-semibold text-sm">Uczestnicy</span>
               </div>
-              <div className="text-sm">{participants?.length || 0} osob</div>
-              <div className="text-xs text-muted-foreground mt-1">Te same dane co EBON</div>
+              <div className="text-sm">3 osoby (Dominika, Dagmara, Ewelina)</div>
+              <div className="text-xs text-muted-foreground mt-1">Tylko osoby przypisane do FST</div>
             </CardContent>
           </Card>
         </div>
@@ -373,7 +373,7 @@ export default function Simulation() {
                   <SelectValue placeholder="Wybierz uczestnika..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {participants?.map((p: any) => (
+                  {participants?.filter((p: any) => (p.portal || "ebon") === portal).map((p: any) => (
                     <SelectItem key={p.id} value={String(p.id)}>
                       {p.imie} {p.nazwisko}
                     </SelectItem>
@@ -394,7 +394,7 @@ export default function Simulation() {
                 <Users className="h-4 w-4 text-green-600" /> Wszyscy uczestnicy
               </div>
               <div className="text-sm text-muted-foreground">
-                Uruchomi automatyzacje kolejno dla {participants?.length || 0} uczestnikow.
+                Uruchomi automatyzacje kolejno dla {participants?.filter((p: any) => (p.portal || "ebon") === portal).length || 0} uczestnikow ({portal.toUpperCase()}).
                 Kazdy zostanie zalogowany, formularz wypelniony i wniosek wyslany automatycznie.
               </div>
               <Button onClick={runAll} disabled={running} variant="outline" className="w-full">
