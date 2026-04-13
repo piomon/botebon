@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, participantsTable, operationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { runAutomationForParticipant, runAutomationForAll, type AutomationResult, type StepLog } from "../automation/browser";
+import { runAutomationForParticipant, runAutomationForAll, runFstAutomationForParticipant, type AutomationResult, type StepLog, type PortalType } from "../automation/browser";
 import puppeteer from "puppeteer-core";
 import { existsSync } from "fs";
 
@@ -81,6 +81,7 @@ router.post("/automation/run-single/:id", async (req, res): Promise<void> => {
 });
 
 router.post("/automation/run-all", async (req, res): Promise<void> => {
+  const portal: PortalType = req.body?.portal === "fst" ? "fst" : "ebon";
   const jobId = `job_${Date.now()}`;
   const participants = await db.select().from(participantsTable).orderBy(participantsTable.id);
 
@@ -94,7 +95,7 @@ router.post("/automation/run-all", async (req, res): Promise<void> => {
   };
   activeJobs.set(jobId, job);
 
-  res.json({ message: "Automatyzacja uruchomiona dla wszystkich uczestnikow", jobId, total: participants.length });
+  res.json({ message: `Automatyzacja ${portal.toUpperCase()} uruchomiona dla wszystkich uczestnikow`, jobId, total: participants.length, portal });
 
   (async () => {
     try {
@@ -108,7 +109,8 @@ router.post("/automation/run-all", async (req, res): Promise<void> => {
             steps.some(s => s.step === "blad_krytyczny" || s.step === "wyslanie_wniosku" || s.step === "stop_przed_wyslaniem")
           ).length;
         },
-        3
+        3,
+        portal
       );
 
       job.results = results;

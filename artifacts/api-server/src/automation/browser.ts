@@ -908,21 +908,377 @@ export async function runAutomationForParticipant(
   };
 }
 
+// =====================================================
+// FST Portal automation (fst-lodzkie.teradane.com)
+// =====================================================
+const FST_URL = "https://fst-lodzkie.teradane.com/";
+
+export async function runFstAutomationForParticipant(
+  participant: ParticipantData,
+  onProgress?: ProgressCallback,
+  autoSubmit = true,
+): Promise<AutomationResult> {
+  const steps: StepLog[] = [];
+  const startedAt = new Date().toISOString();
+  let browser: Browser | null = null;
+  let status: AutomationResult["status"] = "completed";
+
+  const addStep = (s: StepLog) => {
+    steps.push(s);
+    onProgress?.(participant.id, s);
+  };
+
+  try {
+    const chromiumPath = findChromiumPath();
+    const launchOptions: any = {
+      headless: "shell",
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-zygote",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--disable-domain-reliability",
+        "--disable-renderer-backgrounding",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-ipc-flooding-protection",
+        "--metrics-recording-only",
+        "--mute-audio",
+        "--no-first-run",
+        "--js-flags=--max-old-space-size=128",
+        "--window-size=1280,900",
+        "--disable-features=site-per-process",
+        "--disable-component-update",
+      ],
+      protocolTimeout: 120000,
+      timeout: 60000,
+    };
+    launchOptions.executablePath = chromiumPath;
+    browser = await puppeteer.launch(launchOptions);
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    );
+
+    addStep(log("init", "ok", "Uruchomiono przegladarke (FST)"));
+
+    // Go directly to FST portal
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto(FST_URL, { waitUntil: "networkidle2", timeout: 60000 });
+        break;
+      } catch (navErr: any) {
+        console.log(`[fst] Page load attempt ${attempt}/3 failed: ${navErr.message}`);
+        if (attempt === 3) throw navErr;
+        await delay(2000);
+      }
+    }
+    addStep(log("otwarcie_portalu", "ok", `Otwarto ${FST_URL}`));
+    await delay(2000);
+
+    // FST uses Vaadin framework - need to wait for dynamic content
+    // Take screenshot to see what's on the page
+    let screenshot = await takeScreenshot(page);
+    addStep(log("widok_strony", "ok", `Strona zaladowana: ${page.url()}`, screenshot));
+
+    // Dump page structure for debugging
+    const pageStructure = await page.evaluate(() => {
+      const allButtons = Array.from(document.querySelectorAll("button, a, [role='button'], vaadin-button, [class*='btn']"));
+      const allInputs = Array.from(document.querySelectorAll("input, textarea, select, vaadin-text-field, vaadin-combo-box, vaadin-date-picker"));
+      const allText = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, label, span, div"))
+        .slice(0, 50)
+        .map(el => ({ tag: el.tagName, text: (el.textContent || "").trim().substring(0, 80) }))
+        .filter(x => x.text.length > 0);
+      return {
+        buttons: allButtons.map(b => ({ tag: b.tagName, text: (b.textContent || "").trim().substring(0, 60), id: b.id, className: (b.className || "").substring(0, 40) })),
+        inputs: allInputs.map(i => ({ tag: i.tagName, name: (i as any).name || "", id: i.id, type: (i as any).type || "", placeholder: (i as any).placeholder || "" })),
+        headings: allText.slice(0, 20),
+        url: window.location.href,
+      };
+    });
+    addStep(log("struktura_strony", "ok",
+      `Buttons: ${pageStructure.buttons.length}, Inputs: ${pageStructure.inputs.length}, URL: ${pageStructure.url}\n` +
+      `Przyciski: ${pageStructure.buttons.map(b => `[${b.tag}] "${b.text}"`).join(", ")}\n` +
+      `Pola: ${pageStructure.inputs.map(i => `[${i.tag}] ${i.name || i.id || i.placeholder}`).join(", ")}\n` +
+      `Teksty: ${pageStructure.headings.map(h => `"${h.text}"`).join(", ").substring(0, 300)}`
+    ));
+
+    // Try to find login form or navigation
+    // FST/teradane typically has email + password login or PESEL-based
+
+    // Try filling login fields
+    const loginResult = await page.evaluate((p) => {
+      function setVal(input: HTMLInputElement, value: string) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSetter) nativeSetter.call(input, value);
+        else input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+
+      const allInputs = Array.from(document.querySelectorAll("input, vaadin-text-field, vaadin-password-field")) as HTMLInputElement[];
+      let loginFilled = false;
+      let passwordFilled = false;
+
+      for (const input of allInputs) {
+        if (input.type === 'hidden' || input.type === 'submit') continue;
+        const labelText = (input.getAttribute("label") || input.getAttribute("placeholder") || input.getAttribute("aria-label") || input.name || input.id || "").toLowerCase();
+        const parentText = (input.parentElement?.textContent || "").toLowerCase().substring(0, 100);
+        const allText = `${labelText} ${parentText}`;
+
+        if (!loginFilled && (allText.includes("login") || allText.includes("email") || allText.includes("e-mail") || allText.includes("użytkownik") || allText.includes("uzytkownik") || allText.includes("pesel"))) {
+          // Try the inner input for Vaadin components
+          const innerInput = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
+          setVal(innerInput, p.loginPortal);
+          loginFilled = true;
+        }
+        if (!passwordFilled && (input.type === "password" || allText.includes("hasło") || allText.includes("haslo") || allText.includes("password"))) {
+          const innerInput = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
+          setVal(innerInput, p.haslo);
+          passwordFilled = true;
+        }
+      }
+      return { loginFilled, passwordFilled };
+    }, { loginPortal: participant.loginPortal, haslo: participant.haslo });
+
+    addStep(log("logowanie_wypelnienie", loginResult.loginFilled ? "ok" : "skip",
+      `Login: ${loginResult.loginFilled ? "OK" : "nie znaleziono"}, Haslo: ${loginResult.passwordFilled ? "OK" : "nie znaleziono"}`));
+
+    if (loginResult.loginFilled) {
+      // Try clicking login button
+      const loginBtnResult = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll("button, vaadin-button, input[type='submit'], [role='button'], a"));
+        for (const btn of buttons) {
+          const text = (btn.textContent || "").trim().toLowerCase();
+          if (text.includes("zaloguj") || text.includes("login") || text.includes("wejdź") || text.includes("wejdz") || text === "ok") {
+            (btn as HTMLElement).click();
+            return { clicked: true, text: (btn.textContent || "").trim().substring(0, 40) };
+          }
+        }
+        // Try submit
+        const submitBtns = Array.from(document.querySelectorAll("button[type='submit'], input[type='submit']"));
+        if (submitBtns.length > 0) {
+          (submitBtns[0] as HTMLElement).click();
+          return { clicked: true, text: "submit" };
+        }
+        return { clicked: false, text: "" };
+      });
+
+      if (loginBtnResult.clicked) {
+        await delay(3000);
+        addStep(log("logowanie_submit", "ok", `Kliknieto: "${loginBtnResult.text}". URL: ${page.url()}`));
+      }
+    }
+
+    await delay(2000);
+    screenshot = await takeScreenshot(page);
+    addStep(log("po_logowaniu", "ok", `Strona po logowaniu: ${page.url()}`, screenshot));
+
+    // After login - scan the page for navigation/form options
+    const afterLoginStructure = await page.evaluate(() => {
+      const allLinks = Array.from(document.querySelectorAll("a, button, vaadin-button, [role='button'], [role='menuitem'], [role='tab']"));
+      return allLinks.map(el => ({
+        tag: el.tagName,
+        text: (el.textContent || "").trim().substring(0, 80),
+        href: (el as HTMLAnchorElement).href || "",
+      })).filter(x => x.text.length > 0).slice(0, 30);
+    });
+
+    addStep(log("nawigacja", "ok",
+      `Dostepne linki/przyciski: ${afterLoginStructure.map(l => `"${l.text}"`).join(", ").substring(0, 500)}`
+    ));
+
+    // Look for anything related to "wniosek", "nabor", "formularz", "zgłoszenie", "rekrutacja"
+    const formNav = await page.evaluate(() => {
+      const keywords = ["wniosek", "nabór", "nabor", "formularz", "zgłoszenie", "zgloszenie", "rekrutacja", "złóż", "zloz", "aplikuj", "zapisz się", "zapisz sie"];
+      const allLinks = Array.from(document.querySelectorAll("a, button, vaadin-button, [role='button'], [role='menuitem'], [role='tab']"));
+      for (const el of allLinks) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (keywords.some(kw => text.includes(kw))) {
+          (el as HTMLElement).click();
+          return { found: true, text: (el.textContent || "").trim().substring(0, 60) };
+        }
+      }
+      return { found: false, text: "" };
+    });
+
+    if (formNav.found) {
+      await delay(3000);
+      screenshot = await takeScreenshot(page);
+      addStep(log("nawigacja_formularz", "ok", `Kliknieto: "${formNav.text}". URL: ${page.url()}`, screenshot));
+    }
+
+    // Fill ALL visible form fields aggressively
+    const participantDataForForm = {
+      imie: participant.imie,
+      nazwisko: participant.nazwisko,
+      pesel: participant.pesel,
+      email: participant.email,
+      telefon: participant.telefon,
+      adres: participant.adres,
+      kodPocztowy: participant.kodPocztowy,
+      miasto: participant.miasto,
+    };
+
+    const fillResult = await page.evaluate((p) => {
+      function setVal(input: HTMLInputElement, value: string) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSetter) nativeSetter.call(input, value);
+        else input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+
+      const fieldMappings: { match: string[]; value: string }[] = [
+        { match: ["imię", "imie", "first_name"], value: p.imie },
+        { match: ["nazwisko", "last_name"], value: p.nazwisko },
+        { match: ["pesel"], value: p.pesel },
+        { match: ["e-mail", "email"], value: p.email },
+        { match: ["telefon", "phone", "tel"], value: p.telefon },
+        { match: ["ulica", "adres", "street"], value: p.adres },
+        { match: ["kod pocztowy", "postal"], value: p.kodPocztowy },
+        { match: ["miasto", "miejscowość"], value: p.miasto },
+      ];
+
+      let filled = 0;
+      const filledFields: string[] = [];
+      const allInputs = Array.from(document.querySelectorAll("input, textarea, select, vaadin-text-field, vaadin-combo-box, vaadin-date-picker")) as HTMLInputElement[];
+
+      for (const input of allInputs) {
+        if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button') continue;
+        const labelText = (
+          (input.getAttribute("label") || "") + " " +
+          (input.getAttribute("placeholder") || "") + " " +
+          (input.name || "") + " " + (input.id || "") + " " +
+          (input.getAttribute("aria-label") || "") + " " +
+          (input.parentElement?.textContent || "").substring(0, 100)
+        ).toLowerCase();
+
+        let matched = false;
+        for (const mapping of fieldMappings) {
+          if (mapping.match.some(m => labelText.includes(m))) {
+            const target = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
+            if (!target.value || target.value.trim().length === 0) {
+              setVal(target, mapping.value);
+            }
+            filled++;
+            filledFields.push(mapping.match[0]);
+            matched = true;
+            break;
+          }
+        }
+
+        // Fill unknown empty required fields with defaults
+        if (!matched && input.tagName !== 'SELECT') {
+          const target = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
+          if (target && (!target.value || target.value.trim().length === 0) && !target.readOnly && !target.disabled) {
+            if (input.tagName === 'SELECT' || (input as any).tagName === 'VAADIN-COMBO-BOX') {
+              const select = input as HTMLSelectElement;
+              const opts = Array.from(select.options || []).filter(o => o.value && o.value !== "");
+              if (opts.length > 0) { select.value = opts[0].value; select.dispatchEvent(new Event('change', { bubbles: true })); }
+            } else if (input.type !== 'checkbox' && input.type !== 'radio') {
+              setVal(target, "brak");
+              filled++;
+              filledFields.push(`unknown:${labelText.trim().substring(0, 20)}`);
+            }
+          }
+        }
+      }
+
+      // Check all checkboxes
+      const cbs = Array.from(document.querySelectorAll("input[type='checkbox'], vaadin-checkbox")) as HTMLInputElement[];
+      for (const cb of cbs) {
+        if (!cb.checked) { cb.click(); filled++; filledFields.push("checkbox"); }
+      }
+
+      return { filled, filledFields };
+    }, participantDataForForm);
+
+    addStep(log("formularz_wypelnienie", fillResult.filled > 0 ? "ok" : "skip",
+      `Wypelniono ${fillResult.filled} pol: [${fillResult.filledFields.join(", ")}]`));
+
+    if (autoSubmit) {
+      // Try to submit
+      const submitResult = await page.evaluate(() => {
+        const keywords = ["wyślij", "wyslij", "zapisz", "zatwierdź", "zatwierdz", "złóż", "zloz", "submit", "dalej", "ok"];
+        const buttons = Array.from(document.querySelectorAll("button, vaadin-button, input[type='submit'], a[class*='btn'], [role='button']"));
+        for (const btn of buttons) {
+          const text = (btn.textContent || "").trim().toLowerCase();
+          if (keywords.some(kw => text.includes(kw))) {
+            (btn as HTMLElement).click();
+            return { clicked: true, text: (btn.textContent || "").trim().substring(0, 60) };
+          }
+        }
+        return { clicked: false, text: "" };
+      });
+
+      await delay(3000);
+      screenshot = await takeScreenshot(page);
+
+      if (submitResult.clicked) {
+        addStep(log("wyslanie_wniosku", "ok", `Kliknieto: "${submitResult.text}". URL: ${page.url()}`, screenshot));
+        status = "completed";
+      } else {
+        addStep(log("wyslanie_wniosku", "skip", `Nie znaleziono przycisku wyslania. URL: ${page.url()}`, screenshot));
+        status = "stopped";
+      }
+    } else {
+      screenshot = await takeScreenshot(page);
+      addStep(log("stop_przed_wyslaniem", "stop", "Automatyczne wyslanie wylaczone.", screenshot));
+      status = "stopped";
+    }
+
+  } catch (err: any) {
+    steps.push(log("blad_krytyczny", "error", `Blad: ${err.message}`));
+    status = "error";
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch {}
+    }
+  }
+
+  return {
+    participantId: participant.id,
+    imie: participant.imie,
+    nazwisko: participant.nazwisko,
+    loginPortal: participant.loginPortal,
+    status,
+    steps,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+  };
+}
+
+export type PortalType = "ebon" | "fst";
+
 export async function runAutomationForAll(
   participants: ParticipantData[],
   onProgress?: ProgressCallback,
-  concurrency = 4
+  concurrency = 3,
+  portal: PortalType = "ebon"
 ): Promise<AutomationResult[]> {
   const results: AutomationResult[] = new Array(participants.length);
   let nextIndex = 0;
+
+  const automationFn = portal === "fst" ? runFstAutomationForParticipant : runAutomationForParticipant;
 
   async function worker() {
     while (nextIndex < participants.length) {
       const idx = nextIndex++;
       const p = participants[idx];
-      console.log(`[automation] Starting parallel worker for ${p.imie} ${p.nazwisko} (${idx + 1}/${participants.length})`);
+      console.log(`[automation][${portal}] Starting worker for ${p.imie} ${p.nazwisko} (${idx + 1}/${participants.length})`);
       try {
-        results[idx] = await runAutomationForParticipant(p, onProgress);
+        results[idx] = await automationFn(p, onProgress);
       } catch (err: any) {
         results[idx] = {
           participantId: p.id,
@@ -939,7 +1295,7 @@ export async function runAutomationForAll(
   }
 
   const workerCount = Math.min(concurrency, participants.length);
-  console.log(`[automation] Launching ${workerCount} parallel workers for ${participants.length} participants`);
+  console.log(`[automation][${portal}] Launching ${workerCount} parallel workers for ${participants.length} participants`);
   const workers = Array.from({ length: workerCount }, () => worker());
   await Promise.all(workers);
 

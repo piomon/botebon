@@ -85,6 +85,7 @@ export default function Simulation() {
     query: { queryKey: getListParticipantsQueryKey() }
   });
 
+  const [portal, setPortal] = useState<"ebon" | "fst">("ebon");
   const [mode, setMode] = useState<"idle" | "single" | "all">("idle");
   const [selectedParticipantId, setSelectedParticipantId] = useState<string>("");
   const [running, setRunning] = useState(false);
@@ -134,7 +135,11 @@ export default function Simulation() {
     setAllStatus(null);
 
     try {
-      const res = await fetch(`${API_BASE}/automation/run-all`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/automation/run-all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ portal }),
+      });
       const data = await res.json();
       setAllJobId(data.jobId);
       toast({ title: `Uruchomiono automatyzacje dla ${data.total} uczestnikow` });
@@ -213,40 +218,113 @@ export default function Simulation() {
     </div>
   );
 
+  const portalInfo = portal === "ebon" ? {
+    name: NABOR_INFO.name,
+    url: NABOR_INFO.portal,
+    label: "EBON — projektebon.pl",
+    color: "blue",
+  } : {
+    name: "Mennica Uslug Szkoleniowych 3",
+    url: "https://fst-lodzkie.teradane.com",
+    label: "FST — fst-lodzkie.teradane.com",
+    color: "purple",
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight">Automatyzacja Portalu</h1>
-        <p className="text-sm text-muted-foreground">Automatyzacja przegladarki — logowanie i wypelnianie formularzy na projektebon.pl</p>
+        <p className="text-sm text-muted-foreground">Automatyzacja przegladarki — logowanie i wypelnianie formularzy</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 mb-2">
-              <Globe className="h-5 w-5 text-blue-600" />
-              <span className="font-semibold text-sm">Portal</span>
+      <Card className={portal === "ebon" ? "border-blue-200 bg-blue-50/30" : "border-purple-200 bg-purple-50/30"}>
+        <CardContent className="pt-6">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Globe className={`h-5 w-5 ${portal === "ebon" ? "text-blue-600" : "text-purple-600"}`} />
+              <span className="font-semibold text-sm">Wybierz portal:</span>
             </div>
-            <div className="text-sm font-mono text-muted-foreground">{NABOR_INFO.portal}</div>
-            <div className="text-xs text-muted-foreground mt-1">{NABOR_INFO.name}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 mb-2">
-              <Clock className="h-5 w-5 text-orange-600" />
-              <span className="font-semibold text-sm">Otwarcie naboru</span>
+            <div className="flex gap-2">
+              <Button
+                variant={portal === "ebon" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setPortal("ebon")}
+                disabled={running}
+                className={portal === "ebon" ? "bg-blue-600 hover:bg-blue-700" : ""}
+              >
+                EBON (projektebon.pl)
+              </Button>
+              <Button
+                variant={portal === "fst" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setPortal("fst")}
+                disabled={running}
+                className={portal === "fst" ? "bg-purple-600 hover:bg-purple-700" : ""}
+              >
+                FST (teradane.com)
+              </Button>
             </div>
-            <div className="text-sm">10.04.2026, godz. 16:00</div>
-            <div className="text-xs text-muted-foreground mt-1">Zamkniecie: 16.04.2026, godz. 17:00</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <Countdown targetDate={NABOR_INFO.openDate} />
-          </CardContent>
-        </Card>
-      </div>
+            <div className="text-xs text-muted-foreground ml-auto">
+              {portalInfo.url}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {portal === "ebon" && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 mb-2">
+                <Globe className="h-5 w-5 text-blue-600" />
+                <span className="font-semibold text-sm">Portal</span>
+              </div>
+              <div className="text-sm font-mono text-muted-foreground">{NABOR_INFO.portal}</div>
+              <div className="text-xs text-muted-foreground mt-1">{NABOR_INFO.name}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 mb-2">
+                <Clock className="h-5 w-5 text-orange-600" />
+                <span className="font-semibold text-sm">Otwarcie naboru</span>
+              </div>
+              <div className="text-sm">10.04.2026, godz. 16:00</div>
+              <div className="text-xs text-muted-foreground mt-1">Zamkniecie: 16.04.2026, godz. 17:00</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <Countdown targetDate={NABOR_INFO.openDate} />
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {portal === "fst" && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 mb-2">
+                <Globe className="h-5 w-5 text-purple-600" />
+                <span className="font-semibold text-sm">Portal FST</span>
+              </div>
+              <div className="text-sm font-mono text-muted-foreground">fst-lodzkie.teradane.com</div>
+              <div className="text-xs text-muted-foreground mt-1">Mennica Uslug Szkoleniowych 3</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 mb-2">
+                <Users className="h-5 w-5 text-purple-600" />
+                <span className="font-semibold text-sm">Uczestnicy</span>
+              </div>
+              <div className="text-sm">{participants?.length || 0} osob</div>
+              <div className="text-xs text-muted-foreground mt-1">Te same dane co EBON</div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Card className="border-yellow-200 bg-yellow-50/50">
         <CardContent className="pt-6">

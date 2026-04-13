@@ -44,7 +44,7 @@ Full-stack Polish-language recruitment participant management dashboard.
 2. **Uczestnicy** (`/uczestnicy`) — CRUD table for 8 recruitment participants
 3. **Walidacja** (`/walidacja`) — Data validation (PESEL checksum, email, phone)
 4. **Plan** (`/plan`) — Generate scheduled action plans (workers, time slots)
-5. **Automatyzacja** (`/symulacja`) — Real Puppeteer browser automation against projektebon.pl
+5. **Automatyzacja** (`/symulacja`) — Real Puppeteer browser automation with portal selector (EBON: projektebon.pl, FST: fst-lodzkie.teradane.com)
 6. **Ustawienia** (`/ustawienia`) — Schedule/portal configuration
 
 ### Database Tables
