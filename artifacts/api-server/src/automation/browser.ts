@@ -88,9 +88,9 @@ function log(step: string, status: StepLog["status"], message: string, screensho
   };
 }
 
-async function takeScreenshot(page: Page): Promise<string> {
+async function takeScreenshot(page: Page, fullPage = false): Promise<string> {
   try {
-    const buf = await page.screenshot({ type: "jpeg", quality: 60 });
+    const buf = await page.screenshot({ type: "jpeg", quality: 60, fullPage });
     return buf.toString("base64");
   } catch {
     return "";
@@ -1768,7 +1768,7 @@ async function fstPreloginSingle(
       await delay(1500);
     }
 
-    addStep(log("prelogin_ready", "ok", `Gotowy na: ${page.url()}`));
+    addStep(log("prelogin_ready", "ok", `Gotowy na: ${page.url()}`, await takeScreenshot(page, true)));
 
     session.status = "ready";
     session.readyAt = new Date().toISOString();
@@ -1927,7 +1927,7 @@ export async function fstSubmitParticipant(
 
     const afterText = await safeEval(page, () => document.body?.innerText?.substring(0, 500) || "") || "";
     if (afterText.includes("Brak aktualnych naborów")) {
-      addStep(log("submit_no_nabor", "error", "Brak aktualnych naborow"));
+      addStep(log("submit_no_nabor", "error", "Brak aktualnych naborow — formularz niedostepny. Bot zalogowany poprawnie, czeka na otwarcie naboru.", await takeScreenshot(page, true)));
       session.status = "error";
       return { participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
         loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString() };
@@ -1997,10 +1997,10 @@ export async function fstSubmitParticipant(
       }
       await delay(300);
     }
-    addStep(log("step1_selects", "ok", `Selecty: ${s1Selects.length}`));
+    addStep(log("step1_selects", "ok", `Selecty: ${s1Selects.length}`, await takeScreenshot(page)));
 
     const u1 = await uploadAllFiles();
-    addStep(log("step1_upload", "ok", `Upload US: ${u1} plikow`));
+    addStep(log("step1_upload", "ok", `Upload US: ${u1} plikow`, await takeScreenshot(page)));
 
     const dalSel = await safeEval(page, () => {
       const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
@@ -2038,7 +2038,7 @@ export async function fstSubmitParticipant(
     for (let r = 0; r < 3; r++) { mc = await blazorSelectFast(3, powSearch, 1500); if (mc.ok) break; await delay(1000); }
     let ul = { ok: false, msg: "" };
     for (let r = 0; r < 3; r++) { ul = await blazorSelectFast(4, ulicaName, 500); if (ul.ok) break; await delay(1000); }
-    addStep(log("adres", "ok", `woj:${woj.msg} pow:${pow.msg} gm:${gm.msg} mc:${mc.msg} ul:${ul.msg}`));
+    addStep(log("adres", "ok", `woj:${woj.msg} pow:${pow.msg} gm:${gm.msg} mc:${mc.msg} ul:${ul.msg}`, await takeScreenshot(page)));
 
     const emptyTextFields = await page.evaluate((args: any) => {
       const { nrDomu, kodPoczt } = args;
@@ -2073,10 +2073,10 @@ export async function fstSubmitParticipant(
     for (const field of emptyTextFields) {
       try { await blazorFill(page, field.selector, field.value); } catch {}
     }
-    addStep(log("pola", "ok", `Wypelniono ${emptyTextFields.length} pol tekstowych`));
+    addStep(log("pola", "ok", `Wypelniono ${emptyTextFields.length} pol tekstowych`, await takeScreenshot(page)));
 
     const u2 = await uploadAllFiles();
-    addStep(log("uploads", "ok", `PDF x${u2}`));
+    addStep(log("uploads", "ok", `PDF x${u2}`, await takeScreenshot(page)));
 
     const selectsInfo = await safeEval(page, (notatkiRaw: string) => {
       const selects = Array.from(document.querySelectorAll("select"));
@@ -2128,7 +2128,7 @@ export async function fstSubmitParticipant(
         }, [sf.id, sf.value]);
       }
     }
-    addStep(log("selecty", "ok", `${selectsInfo.map((s: any) => s.label).join("; ")}`));
+    addStep(log("selecty", "ok", `${selectsInfo.map((s: any) => s.label).join("; ")}`, await takeScreenshot(page)));
 
     const checkboxesToClick = await page.evaluate(() => {
       const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
@@ -2152,7 +2152,7 @@ export async function fstSubmitParticipant(
     for (const cbSel of checkboxesToClick) {
       try { await page.locator(cbSel).click(); } catch {}
     }
-    addStep(log("checkboxy", "ok", `Zaznaczono ${checkboxesToClick.length} checkboxow`));
+    addStep(log("checkboxy", "ok", `Zaznaczono ${checkboxesToClick.length} checkboxow`, await takeScreenshot(page)));
 
     await safeEval(page, () => window.scrollTo(0, document.body.scrollHeight));
     await delay(200);
@@ -2229,7 +2229,7 @@ export async function fstSubmitParticipant(
       for (const sel of cbsToFix) { try { await page.locator(sel).click(); } catch {} }
     }
 
-    addStep(log("gotowy", "ok", `Formularz gotowy. puste_inp:${emptyTextCheck} puste_sel:${emptySelectCheck}. URL: ${page.url()}`));
+    addStep(log("gotowy", "ok", `Formularz gotowy. puste_inp:${emptyTextCheck} puste_sel:${emptySelectCheck}. URL: ${page.url()}`, await takeScreenshot(page, true)));
 
     await safeEval(page, () => window.scrollTo(0, document.body.scrollHeight));
     await delay(300);
@@ -2349,6 +2349,36 @@ export async function fstCleanupAll(): Promise<{ closed: number }> {
     fstSharedBrowser = null;
   }
   return { closed };
+}
+
+export async function fstDryRunSingle(participant: ParticipantData): Promise<AutomationResult> {
+  const existingSession = fstSessions.get(participant.id);
+  if (existingSession) {
+    try { await existingSession.page.close(); } catch {}
+    fstSessions.delete(participant.id);
+  }
+
+  const browser = await ensureSharedBrowser();
+
+  const preResult = await fstPreloginSingle(browser, participant);
+  if (!preResult.success) {
+    const session = fstSessions.get(participant.id);
+    if (session) { try { await session.page.close(); } catch {} }
+    fstSessions.delete(participant.id);
+    return {
+      participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
+      loginPortal: participant.loginPortal, status: "error", steps: preResult.steps,
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+  }
+
+  const result = await fstSubmitParticipant(participant, undefined, false);
+
+  const session = fstSessions.get(participant.id);
+  if (session) { try { await session.page.close(); } catch {} }
+  fstSessions.delete(participant.id);
+
+  return result;
 }
 
 export type PortalType = "ebon" | "fst";

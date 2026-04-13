@@ -3,7 +3,7 @@ import { db, participantsTable, operationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import {
   runAutomationForParticipant, runAutomationForAll, runFstAutomationForParticipant,
-  fstPreloginAll, fstSubmitAll, fstCleanupAll, getFstSessionsStatus,
+  fstPreloginAll, fstSubmitAll, fstCleanupAll, getFstSessionsStatus, fstDryRunSingle,
   type AutomationResult, type StepLog, type PortalType
 } from "../automation/browser";
 import { chromium } from "playwright-core";
@@ -292,6 +292,33 @@ router.post("/automation/fst-submit", async (req, res): Promise<void> => {
 router.post("/automation/fst-cleanup", async (_req, res): Promise<void> => {
   const result = await fstCleanupAll();
   res.json({ message: `Zamknieto ${result.closed} przegladarek`, ...result });
+});
+
+router.post("/automation/fst-dryrun/:id", async (req, res): Promise<void> => {
+  const participantId = parseInt(req.params.id, 10);
+  if (isNaN(participantId)) {
+    res.status(400).json({ error: "Nieprawidlowe ID uczestnika" });
+    return;
+  }
+
+  const [participant] = await db.select().from(participantsTable).where(eq(participantsTable.id, participantId));
+  if (!participant) {
+    res.status(404).json({ error: "Uczestnik nie znaleziony" });
+    return;
+  }
+
+  const pp = (participant as any).portal || "ebon";
+  if (pp !== "fst" && pp !== "both") {
+    res.status(400).json({ error: "Uczestnik nie jest przypisany do FST" });
+    return;
+  }
+
+  try {
+    const result = await fstDryRunSingle(participant as any);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post("/automation/explore-fst", async (req, res): Promise<void> => {

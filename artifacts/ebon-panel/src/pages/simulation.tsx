@@ -123,6 +123,8 @@ export default function Simulation() {
   const [fstPreloginRunning, setFstPreloginRunning] = useState(false);
   const [fstSubmitRunning, setFstSubmitRunning] = useState(false);
   const fstPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [dryRunning, setDryRunning] = useState(false);
+  const [dryRunResult, setDryRunResult] = useState<AutomationResult | null>(null);
 
   const fetchFstSessions = async () => {
     try {
@@ -241,6 +243,33 @@ export default function Simulation() {
       toast({ title: "Blad", description: err.message, variant: "destructive" });
     }
     setTimeout(() => setFstSubmitRunning(false), 5000);
+  };
+
+  const runFstDryRun = async () => {
+    if (!selectedParticipantId) return;
+    setDryRunning(true);
+    setDryRunResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/automation/fst-dryrun/${selectedParticipantId}`, { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        toast({ title: "Blad", description: data.error, variant: "destructive" });
+      } else {
+        setDryRunResult(data);
+        setExpandedScreenshots(prev => {
+          const next = { ...prev };
+          (data.steps || []).forEach((_: any, i: number) => {
+            next[`dryrun-${data.participantId}-${i}`] = true;
+          });
+          return next;
+        });
+        toast({ title: `Podglad zakoczony: ${data.status}` });
+      }
+    } catch (err: any) {
+      toast({ title: "Blad", description: err.message, variant: "destructive" });
+    } finally {
+      setDryRunning(false);
+    }
   };
 
   const runFstCleanup = async () => {
@@ -598,13 +627,17 @@ export default function Simulation() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="border-green-200">
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <Monitor className="h-5 w-5" /> Pojedynczy test FST
+                <ImageIcon className="h-5 w-5 text-green-600" /> Podglad formularza FST (dry run)
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm">
+                Loguje uczestnika, wypelnia caly formularz, robi screenshoty na kazdym kroku — ale <strong>NIE klika "Zloz wniosek"</strong>. 
+                Mozesz zobaczyc dokladnie co bot wpisze dla kazdego uczestnika.
+              </div>
               <div className="border rounded-lg p-4 space-y-3">
                 <Select value={selectedParticipantId} onValueChange={setSelectedParticipantId}>
                   <SelectTrigger>
@@ -621,16 +654,47 @@ export default function Simulation() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Button onClick={runSingle} disabled={running || !selectedParticipantId} className="w-full" variant="outline">
-                  {running && mode === "single" ? (
-                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Trwa...</>
+                <Button onClick={runFstDryRun} disabled={dryRunning || !selectedParticipantId} className="w-full bg-green-600 hover:bg-green-700">
+                  {dryRunning ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Logowanie i wypelnianie...</>
                   ) : (
-                    <><Play className="mr-2 h-4 w-4" /> Test pojedynczego (pelny cykl)</>
+                    <><ImageIcon className="mr-2 h-4 w-4" /> Podglad — wypelnij bez wysylania</>
                   )}
                 </Button>
               </div>
             </CardContent>
           </Card>
+
+          {dryRunning && (
+            <Card className="border-green-200">
+              <CardContent className="pt-6 flex flex-col items-center justify-center gap-3 py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-green-600" />
+                <span className="text-muted-foreground font-medium">Bot loguje sie i wypelnia formularz...</span>
+                <span className="text-xs text-muted-foreground">To moze potrwac ~60 sekund</span>
+              </CardContent>
+            </Card>
+          )}
+
+          {dryRunResult && (
+            <Card className="border-green-200">
+              <CardHeader className="pb-3 border-b bg-green-50/50">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <ImageIcon className="h-5 w-5 text-green-600" />
+                    Podglad: {dryRunResult.imie} {dryRunResult.nazwisko}
+                    <span className="text-sm font-normal text-muted-foreground ml-2">{dryRunResult.loginPortal}</span>
+                  </CardTitle>
+                  <StatusBadge status={dryRunResult.status} />
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Czas: {new Date(dryRunResult.startedAt).toLocaleString('pl-PL')} — {new Date(dryRunResult.finishedAt).toLocaleString('pl-PL')}
+                </div>
+              </CardHeader>
+              <CardContent className="pt-4">
+                {renderSteps(dryRunResult.steps, `dryrun-${dryRunResult.participantId}`)}
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
 
