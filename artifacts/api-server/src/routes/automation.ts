@@ -84,7 +84,10 @@ router.post("/automation/run-all", async (req, res): Promise<void> => {
   const portal: PortalType = req.body?.portal === "fst" ? "fst" : "ebon";
   const jobId = `job_${Date.now()}`;
   const allParticipants = await db.select().from(participantsTable).orderBy(participantsTable.id);
-  const participants = allParticipants.filter(p => (p.portal || "ebon") === portal);
+  const participants = allParticipants.filter(p => {
+    const pp = p.portal || "ebon";
+    return pp === portal || pp === "both";
+  });
 
   const job = {
     status: "running" as const,
@@ -172,8 +175,10 @@ router.post("/automation/run-single-sync/:id", async (req, res): Promise<void> =
   }
 
   try {
-    const participantPortal = (participant as any).portal || "ebon";
-    const result = participantPortal === "fst"
+    const dbPortal = (participant as any).portal || "ebon";
+    const requestedPortal = req.body?.portal;
+    const usePortal = requestedPortal || (dbPortal === "fst" ? "fst" : dbPortal === "both" ? "ebon" : dbPortal);
+    const result = usePortal === "fst"
       ? await runFstAutomationForParticipant(participant as any)
       : await runAutomationForParticipant(participant as any);
 

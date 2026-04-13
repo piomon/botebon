@@ -15,7 +15,7 @@ const SEED_DATA = [
     loginPortal: "Karolinaczubinska6@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
-    portal: "ebon",
+    portal: "both",
     validationStatus: "ok" as const,
   },
   {
@@ -30,7 +30,7 @@ const SEED_DATA = [
     loginPortal: "Bizewskaania080@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
-    portal: "ebon",
+    portal: "both",
     validationStatus: "ok" as const,
   },
   {
@@ -45,7 +45,7 @@ const SEED_DATA = [
     loginPortal: "justynaj957@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
-    portal: "ebon",
+    portal: "both",
     validationStatus: "ok" as const,
   },
   {
@@ -75,7 +75,7 @@ const SEED_DATA = [
     loginPortal: "Balejaaldona7@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
-    portal: "ebon",
+    portal: "both",
     validationStatus: "ok" as const,
   },
   {
@@ -105,7 +105,7 @@ const SEED_DATA = [
     loginPortal: "Gosiaswiderek46@gmail.com",
     haslo: "Diana1988@",
     notatki: "",
-    portal: "ebon",
+    portal: "both",
     validationStatus: "ok" as const,
   },
   {
@@ -120,7 +120,7 @@ const SEED_DATA = [
     loginPortal: "balejasandra@gmail.com",
     haslo: "Diana1988@",
     notatki: "bezrobotna zarejestrowana w UP; wykształcenie średnie; nieprowadząca działalności",
-    portal: "ebon",
+    portal: "both",
     validationStatus: "ok" as const,
   },
   {
