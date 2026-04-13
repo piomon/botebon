@@ -1727,12 +1727,13 @@ async function fstPreloginSingle(
     await page.waitForSelector('input[name="model.Email"]', { state: "visible", timeout: 15000 });
     await page.waitForSelector('input[name="model.Haslo"]', { state: "visible", timeout: 5000 });
     await delay(500);
+    addStep(log("prelogin_strona", "ok", `Otwarto strone logowania FST`, await takeScreenshot(page)));
 
     await blazorFill(page, 'input[name="model.Email"]', participant.loginPortal);
     await delay(150);
     await blazorFill(page, 'input[name="model.Haslo"]', participant.haslo);
     await delay(150);
-    addStep(log("prelogin_login_fill", "ok", `Wypelniono: ${participant.loginPortal}`));
+    addStep(log("prelogin_login_fill", "ok", `Wypelniono login: ${participant.loginPortal}`, await takeScreenshot(page)));
 
     await page.locator("button.btn-primary").click();
     await delay(4000);
@@ -1743,9 +1744,10 @@ async function fstPreloginSingle(
         const alerts = document.querySelectorAll(".alert, .text-danger, .validation-message");
         return Array.from(alerts).map(a => a.textContent?.trim()).filter(t => t).join("; ");
       }) || "";
+      addStep(log("prelogin_login_fail", "error", `BLAD LOGOWANIA: ${errorMsg || "brak bledu na stronie"}. Sprawdz dane logowania.`, await takeScreenshot(page)));
       throw new Error(`Logowanie nieudane: ${errorMsg || "brak bledu"}`);
     }
-    addStep(log("prelogin_login_ok", "ok", `Zalogowano. URL: ${currentUrl}`));
+    addStep(log("prelogin_login_ok", "ok", `Zalogowano pomyslnie! URL: ${currentUrl}`, await takeScreenshot(page)));
 
     await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll("a"));
