@@ -913,6 +913,225 @@ export async function runAutomationForParticipant(
 // =====================================================
 const FST_URL = "https://fst-lodzkie.teradane.com/";
 
+export async function exploreFstPortal(login: string, password: string) {
+  const steps: { name: string; screenshot: string; html: string; url: string; elements: any }[] = [];
+  let browser: Browser | null = null;
+
+  try {
+    const chromiumPath = findChromiumPath();
+    browser = await puppeteer.launch({
+      headless: "shell" as any,
+      executablePath: chromiumPath,
+      args: [
+        "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+        "--disable-gpu", "--no-zygote", "--disable-extensions",
+        "--window-size=1280,900",
+      ],
+      protocolTimeout: 120000,
+      timeout: 60000,
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+    const snap = async (name: string) => {
+      const screenshot = await takeScreenshot(page);
+      const html = await page.evaluate(() => document.body?.innerHTML?.substring(0, 5000) || "");
+      const url = page.url();
+      const elements = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll("button, a.btn, input[type='submit']"))
+          .map(el => ({ tag: el.tagName, text: (el.textContent || "").trim().substring(0, 80), href: (el as any).href || "", id: el.id, cls: (el.className || "").substring(0, 60) }))
+          .filter(x => x.text.length > 0);
+        const links = Array.from(document.querySelectorAll("a.nav-link"))
+          .map(el => ({ text: (el.textContent || "").trim().substring(0, 80), href: (el as any).href || "" }))
+          .filter(x => x.text.length > 0);
+        const inputs = Array.from(document.querySelectorAll("input, textarea, select"))
+          .map(el => ({ tag: el.tagName, type: (el as any).type || "", name: (el as any).name || "", id: el.id, placeholder: (el as any).placeholder || "", value: (el as any).value?.substring(0, 30) || "" }));
+        const texts = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, label, .card-title, .card-header"))
+          .slice(0, 30)
+          .map(el => ({ tag: el.tagName, text: (el.textContent || "").trim().substring(0, 120) }))
+          .filter(x => x.text.length > 0);
+        return { buttons: btns, links, inputs, texts };
+      });
+      steps.push({ name, screenshot, html: html.substring(0, 3000), url, elements });
+    };
+
+    // STEP 1: Go directly to login page
+    await page.goto("https://fst-lodzkie.teradane.com/Login", { waitUntil: "networkidle2", timeout: 60000 });
+    await delay(2000);
+    await snap("1_login_page");
+
+    // STEP 2: Fill login form - Blazor needs proper event dispatch
+    // Clear and type email
+    await page.click('input[name="model.Email"]', { clickCount: 3 });
+    await page.keyboard.press("Backspace");
+    await page.type('input[name="model.Email"]', login, { delay: 30 });
+    // Dispatch events Blazor listens to
+    await page.evaluate((val) => {
+      const el = document.querySelector('input[name="model.Email"]') as HTMLInputElement;
+      if (el) {
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    }, login);
+    await delay(200);
+
+    // Clear and type password
+    await page.click('input[name="model.Haslo"]', { clickCount: 3 });
+    await page.keyboard.press("Backspace");
+    await page.type('input[name="model.Haslo"]', password, { delay: 30 });
+    await page.evaluate((val) => {
+      const el = document.querySelector('input[name="model.Haslo"]') as HTMLInputElement;
+      if (el) {
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    }, password);
+    await delay(200);
+
+    await snap("2_login_filled");
+
+    // STEP 3: Click the "Zaloguj" button using Puppeteer native click
+    await page.click("button.btn-primary");
+    await delay(6000);
+    await snap("3_after_login");
+
+    // STEP 4: Click "złożyć wniosek" link on the dashboard (Blazor - must use clicks, not goto)
+    const wniosekClicked = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll("a"));
+      for (const link of links) {
+        const t = (link.textContent || "").trim().toLowerCase();
+        if (t.includes("złożyć wniosek") || t.includes("zloz wniosek")) {
+          (link as HTMLElement).click();
+          return { clicked: true, text: (link.textContent || "").trim().substring(0, 80), href: link.href };
+        }
+      }
+      // Try sidebar link
+      for (const link of links) {
+        const t = (link.textContent || "").trim().toLowerCase();
+        if (t.includes("złóż wniosek")) {
+          (link as HTMLElement).click();
+          return { clicked: true, text: (link.textContent || "").trim().substring(0, 80), href: link.href };
+        }
+      }
+      return { clicked: false, text: "", href: "" };
+    });
+    await delay(5000);
+    await snap("4_nabory_page");
+
+    // STEP 5: On nabor page, look for "Złóż wniosek" action button
+    const zlozBtn = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll("button, a.btn, input[type='submit']"));
+      const results = btns.map(b => ({ text: (b.textContent || "").trim().substring(0, 80), cls: (b.className || "").substring(0, 60) }));
+      for (const btn of btns) {
+        const t = (btn.textContent || "").trim().toLowerCase();
+        if (t.includes("złóż wniosek") || t.includes("złóż")) {
+          (btn as HTMLElement).click();
+          return { clicked: true, text: (btn.textContent || "").trim(), allButtons: results };
+        }
+      }
+      return { clicked: false, text: "", allButtons: results };
+    });
+    await delay(5000);
+    await snap("5_after_zloz_click");
+
+    // STEP 6: Check what's on the page now - type selection or form
+    const pageAnalysis = await page.evaluate(() => {
+      const radios = Array.from(document.querySelectorAll("input[type='radio']"));
+      const selects = Array.from(document.querySelectorAll("select"));
+      const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea"));
+      const buttons = Array.from(document.querySelectorAll("button, a.btn"));
+      const allText = document.body?.innerText?.substring(0, 3000) || "";
+      return {
+        radios: radios.map(r => ({ name: (r as any).name, value: (r as any).value, id: r.id, label: r.closest("label")?.textContent?.trim()?.substring(0, 80) || r.parentElement?.textContent?.trim()?.substring(0, 80) || "" })),
+        selects: selects.map(s => ({
+          name: (s as any).name, id: s.id,
+          options: Array.from((s as HTMLSelectElement).options).map(o => ({ value: o.value, text: o.textContent?.trim() })).slice(0, 15)
+        })),
+        inputs: inputs.map(i => ({ name: (i as any).name, type: (i as any).type, placeholder: (i as any).placeholder, id: i.id })),
+        buttons: buttons.map(b => ({ text: (b.textContent || "").trim().substring(0, 80), cls: (b.className || "").substring(0, 40) })),
+        bodyText: allText.substring(0, 2000),
+      };
+    });
+    steps.push({ name: "6_page_analysis", screenshot: "", html: JSON.stringify(pageAnalysis, null, 2).substring(0, 4000), url: page.url(), elements: pageAnalysis });
+
+    // Try clicking radio for "zamieszkanie" if available
+    if (pageAnalysis.radios.length > 0) {
+      await page.evaluate(() => {
+        const radios = Array.from(document.querySelectorAll("input[type='radio']"));
+        for (const r of radios) {
+          const label = (r.closest("label")?.textContent || r.parentElement?.textContent || "").toLowerCase();
+          if (label.includes("zamieszkanie") || label.includes("zamieszkuj") || label.includes("mieszk")) {
+            (r as HTMLElement).click();
+            return;
+          }
+        }
+        if (radios.length > 0) (radios[0] as HTMLElement).click();
+      });
+      await delay(2000);
+    }
+
+    // Try selecting from dropdown if available
+    if (pageAnalysis.selects.length > 0) {
+      await page.evaluate(() => {
+        const selects = Array.from(document.querySelectorAll("select"));
+        for (const s of selects) {
+          const opts = Array.from((s as HTMLSelectElement).options).filter(o => o.value);
+          if (opts.length > 1) {
+            (s as HTMLSelectElement).value = opts[1].value;
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+      });
+      await delay(2000);
+    }
+
+    await snap("7_after_type_selection");
+
+    // Explore the form fields
+    const formFields = await page.evaluate(() => {
+      const all = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, select"));
+      return all.map(el => ({
+        tag: el.tagName,
+        type: (el as any).type || "",
+        name: (el as any).name || "",
+        id: el.id,
+        placeholder: (el as any).placeholder || "",
+        required: (el as any).required || false,
+        className: (el.className || "").substring(0, 50),
+        label: el.closest("div")?.querySelector("label")?.textContent?.trim()?.substring(0, 80) || "",
+        options: el.tagName === "SELECT" ? Array.from((el as HTMLSelectElement).options).map(o => ({ v: o.value, t: o.textContent?.trim() })).slice(0, 15) : [],
+      }));
+    });
+    steps.push({ name: "8_form_fields", screenshot: "", html: JSON.stringify(formFields, null, 2), url: page.url(), elements: { formFields } });
+
+    // Scroll and take more screenshots
+    await page.evaluate(() => window.scrollBy(0, 500));
+    await delay(1000);
+    await snap("9_scroll_down");
+
+    await page.evaluate(() => window.scrollBy(0, 500));
+    await delay(1000);
+    await snap("10_scroll_more");
+
+    await page.evaluate(() => window.scrollBy(0, 500));
+    await delay(1000);
+    await snap("11_scroll_bottom");
+
+  } catch (err: any) {
+    steps.push({ name: "ERROR", screenshot: "", html: err.message + "\n" + err.stack, url: "", elements: {} });
+  } finally {
+    if (browser) try { await browser.close(); } catch {}
+  }
+
+  return { steps };
+}
+
 export async function runFstAutomationForParticipant(
   participant: ParticipantData,
   onProgress?: ProgressCallback,
@@ -928,318 +1147,319 @@ export async function runFstAutomationForParticipant(
     onProgress?.(participant.id, s);
   };
 
+  async function blazorType(page: Page, selector: string, value: string) {
+    await page.click(selector, { clickCount: 3 });
+    await page.keyboard.press("Backspace");
+    await page.type(selector, value, { delay: 20 });
+    await page.evaluate((sel, val) => {
+      const el = document.querySelector(sel) as HTMLInputElement;
+      if (el) {
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    }, selector, value);
+    await delay(100);
+  }
+
   try {
     const chromiumPath = findChromiumPath();
-    const launchOptions: any = {
-      headless: "shell",
+    browser = await puppeteer.launch({
+      headless: "shell" as any,
+      executablePath: chromiumPath,
       args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-zygote",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-default-apps",
-        "--disable-sync",
-        "--disable-translate",
-        "--disable-domain-reliability",
-        "--disable-renderer-backgrounding",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-ipc-flooding-protection",
-        "--metrics-recording-only",
-        "--mute-audio",
-        "--no-first-run",
+        "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+        "--disable-gpu", "--no-zygote", "--disable-extensions",
+        "--disable-background-networking", "--disable-default-apps",
+        "--disable-sync", "--disable-translate",
+        "--metrics-recording-only", "--mute-audio", "--no-first-run",
         "--js-flags=--max-old-space-size=128",
-        "--window-size=1280,900",
-        "--disable-features=site-per-process",
-        "--disable-component-update",
+        "--window-size=1280,900", "--disable-features=site-per-process",
       ],
       protocolTimeout: 120000,
       timeout: 60000,
-    };
-    launchOptions.executablePath = chromiumPath;
-    browser = await puppeteer.launch(launchOptions);
+    });
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
     addStep(log("init", "ok", "Uruchomiono przegladarke (FST)"));
 
-    // Go directly to FST portal
+    // STEP 1: Go to login page
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await page.goto(FST_URL, { waitUntil: "networkidle2", timeout: 60000 });
+        await page.goto("https://fst-lodzkie.teradane.com/Login", { waitUntil: "networkidle2", timeout: 60000 });
         break;
       } catch (navErr: any) {
-        console.log(`[fst] Page load attempt ${attempt}/3 failed: ${navErr.message}`);
+        console.log(`[fst] Login page load attempt ${attempt}/3 failed: ${navErr.message}`);
         if (attempt === 3) throw navErr;
         await delay(2000);
       }
     }
-    addStep(log("otwarcie_portalu", "ok", `Otwarto ${FST_URL}`));
     await delay(2000);
-
-    // FST uses Vaadin framework - need to wait for dynamic content
-    // Take screenshot to see what's on the page
     let screenshot = await takeScreenshot(page);
-    addStep(log("widok_strony", "ok", `Strona zaladowana: ${page.url()}`, screenshot));
+    addStep(log("otwarcie_portalu", "ok", `Otwarto strone logowania FST. URL: ${page.url()}`, screenshot));
 
-    // Dump page structure for debugging
-    const pageStructure = await page.evaluate(() => {
-      const allButtons = Array.from(document.querySelectorAll("button, a, [role='button'], vaadin-button, [class*='btn']"));
-      const allInputs = Array.from(document.querySelectorAll("input, textarea, select, vaadin-text-field, vaadin-combo-box, vaadin-date-picker"));
-      const allText = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, label, span, div"))
-        .slice(0, 50)
-        .map(el => ({ tag: el.tagName, text: (el.textContent || "").trim().substring(0, 80) }))
-        .filter(x => x.text.length > 0);
-      return {
-        buttons: allButtons.map(b => ({ tag: b.tagName, text: (b.textContent || "").trim().substring(0, 60), id: b.id, className: (b.className || "").substring(0, 40) })),
-        inputs: allInputs.map(i => ({ tag: i.tagName, name: (i as any).name || "", id: i.id, type: (i as any).type || "", placeholder: (i as any).placeholder || "" })),
-        headings: allText.slice(0, 20),
-        url: window.location.href,
-      };
+    // STEP 2: Fill login form (Blazor Server - must use page.type + event dispatch)
+    const emailExists = await page.$('input[name="model.Email"]');
+    const passExists = await page.$('input[name="model.Haslo"]');
+
+    if (!emailExists || !passExists) {
+      addStep(log("logowanie", "error", "Nie znaleziono pol logowania (model.Email / model.Haslo)"));
+      status = "error";
+      throw new Error("Brak pol logowania");
+    }
+
+    await blazorType(page, 'input[name="model.Email"]', participant.loginPortal);
+    await blazorType(page, 'input[name="model.Haslo"]', participant.haslo);
+
+    addStep(log("logowanie_wypelnienie", "ok", `Wypelniono: email=${participant.loginPortal}`));
+
+    // STEP 3: Click "Zaloguj" button
+    await page.click("button.btn-primary");
+    await delay(6000);
+    screenshot = await takeScreenshot(page);
+    const currentUrl = page.url();
+    const isLoggedIn = !currentUrl.toLowerCase().includes("/login");
+
+    if (!isLoggedIn) {
+      const errorMsg = await page.evaluate(() => {
+        const alerts = document.querySelectorAll(".alert, .text-danger, .validation-message, .validation-summary-errors");
+        return Array.from(alerts).map(a => a.textContent?.trim()).filter(t => t).join("; ");
+      });
+      addStep(log("logowanie_submit", "error", `Logowanie nieudane. URL: ${currentUrl}. Bledy: ${errorMsg || "brak"}`, screenshot));
+      status = "error";
+      throw new Error(`Logowanie nieudane: ${errorMsg || "brak bledu na stronie"}`);
+    }
+
+    addStep(log("logowanie_submit", "ok", `Zalogowano. URL: ${currentUrl}`, screenshot));
+
+    // STEP 4: Navigate to "Złóż wniosek" (click link on dashboard or sidebar)
+    const navResult = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll("a"));
+      for (const link of links) {
+        const t = (link.textContent || "").trim().toLowerCase();
+        if (t.includes("złożyć wniosek")) {
+          (link as HTMLElement).click();
+          return { clicked: true, text: (link.textContent || "").trim().substring(0, 80), via: "dashboard" };
+        }
+      }
+      for (const link of links) {
+        const t = (link.textContent || "").trim().toLowerCase();
+        if (t === "złóż wniosek") {
+          (link as HTMLElement).click();
+          return { clicked: true, text: (link.textContent || "").trim().substring(0, 80), via: "sidebar" };
+        }
+      }
+      return { clicked: false, text: "", via: "" };
     });
-    addStep(log("struktura_strony", "ok",
-      `Buttons: ${pageStructure.buttons.length}, Inputs: ${pageStructure.inputs.length}, URL: ${pageStructure.url}\n` +
-      `Przyciski: ${pageStructure.buttons.map(b => `[${b.tag}] "${b.text}"`).join(", ")}\n` +
-      `Pola: ${pageStructure.inputs.map(i => `[${i.tag}] ${i.name || i.id || i.placeholder}`).join(", ")}\n` +
-      `Teksty: ${pageStructure.headings.map(h => `"${h.text}"`).join(", ").substring(0, 300)}`
-    ));
 
-    // Try to find login form or navigation
-    // FST/teradane typically has email + password login or PESEL-based
+    await delay(5000);
+    screenshot = await takeScreenshot(page);
+    addStep(log("nawigacja_nabory", navResult.clicked ? "ok" : "error",
+      `Nawigacja do naborow: ${navResult.clicked ? `"${navResult.text}" (${navResult.via})` : "nie znaleziono linku"}. URL: ${page.url()}`,
+      screenshot));
 
-    // Try filling login fields
-    const loginResult = await page.evaluate((p) => {
-      function setVal(input: HTMLInputElement, value: string) {
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        if (nativeSetter) nativeSetter.call(input, value);
-        else input.value = value;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        input.dispatchEvent(new Event('blur', { bubbles: true }));
-      }
+    if (!navResult.clicked) {
+      status = "error";
+      throw new Error("Nie znaleziono linku do naborow");
+    }
 
-      const allInputs = Array.from(document.querySelectorAll("input, vaadin-text-field, vaadin-password-field")) as HTMLInputElement[];
-      let loginFilled = false;
-      let passwordFilled = false;
-
-      for (const input of allInputs) {
-        if (input.type === 'hidden' || input.type === 'submit') continue;
-        const labelText = (input.getAttribute("label") || input.getAttribute("placeholder") || input.getAttribute("aria-label") || input.name || input.id || "").toLowerCase();
-        const parentText = (input.parentElement?.textContent || "").toLowerCase().substring(0, 100);
-        const allText = `${labelText} ${parentText}`;
-
-        if (!loginFilled && (allText.includes("login") || allText.includes("email") || allText.includes("e-mail") || allText.includes("użytkownik") || allText.includes("uzytkownik") || allText.includes("pesel"))) {
-          // Try the inner input for Vaadin components
-          const innerInput = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
-          setVal(innerInput, p.loginPortal);
-          loginFilled = true;
-        }
-        if (!passwordFilled && (input.type === "password" || allText.includes("hasło") || allText.includes("haslo") || allText.includes("password"))) {
-          const innerInput = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
-          setVal(innerInput, p.haslo);
-          passwordFilled = true;
+    // STEP 5: Click "Złóż wniosek" button next to the active nabor
+    const zlozResult = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll("button.btn-primary"));
+      for (const btn of btns) {
+        const t = (btn.textContent || "").trim().toLowerCase();
+        if (t.includes("złóż wniosek") || t.includes("złóż")) {
+          (btn as HTMLElement).click();
+          return { clicked: true, text: (btn.textContent || "").trim() };
         }
       }
-      return { loginFilled, passwordFilled };
-    }, { loginPortal: participant.loginPortal, haslo: participant.haslo });
+      return { clicked: false, text: "" };
+    });
 
-    addStep(log("logowanie_wypelnienie", loginResult.loginFilled ? "ok" : "skip",
-      `Login: ${loginResult.loginFilled ? "OK" : "nie znaleziono"}, Haslo: ${loginResult.passwordFilled ? "OK" : "nie znaleziono"}`));
+    await delay(5000);
+    screenshot = await takeScreenshot(page);
 
-    if (loginResult.loginFilled) {
-      // Try clicking login button
-      const loginBtnResult = await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button, vaadin-button, input[type='submit'], [role='button'], a"));
-        for (const btn of buttons) {
-          const text = (btn.textContent || "").trim().toLowerCase();
-          if (text.includes("zaloguj") || text.includes("login") || text.includes("wejdź") || text.includes("wejdz") || text === "ok") {
-            (btn as HTMLElement).click();
-            return { clicked: true, text: (btn.textContent || "").trim().substring(0, 40) };
-          }
-        }
-        // Try submit
-        const submitBtns = Array.from(document.querySelectorAll("button[type='submit'], input[type='submit']"));
-        if (submitBtns.length > 0) {
-          (submitBtns[0] as HTMLElement).click();
-          return { clicked: true, text: "submit" };
-        }
-        return { clicked: false, text: "" };
+    // Check if "Złożono wniosek" message appeared (already submitted)
+    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || "");
+    const alreadySubmitted = pageText.toLowerCase().includes("złożono wniosek");
+
+    if (alreadySubmitted) {
+      addStep(log("wniosek_juz_zlozony", "ok",
+        `Wniosek juz zostal zlozony wczesniej dla tego konta. URL: ${page.url()}`, screenshot));
+      status = "completed";
+    } else if (zlozResult.clicked) {
+      addStep(log("klik_zloz_wniosek", "ok",
+        `Kliknieto "${zlozResult.text}". URL: ${page.url()}`, screenshot));
+
+      // STEP 6: We should now be on a form page - explore & fill
+      await delay(3000);
+
+      // Check if there's a type selection (zamieszkanie/praca/nauka)
+      const hasTypeSelection = await page.evaluate(() => {
+        const radios = document.querySelectorAll("input[type='radio']");
+        const selects = document.querySelectorAll("select");
+        return { radios: radios.length, selects: selects.length };
       });
 
-      if (loginBtnResult.clicked) {
-        await delay(3000);
-        addStep(log("logowanie_submit", "ok", `Kliknieto: "${loginBtnResult.text}". URL: ${page.url()}`));
-      }
-    }
-
-    await delay(2000);
-    screenshot = await takeScreenshot(page);
-    addStep(log("po_logowaniu", "ok", `Strona po logowaniu: ${page.url()}`, screenshot));
-
-    // After login - scan the page for navigation/form options
-    const afterLoginStructure = await page.evaluate(() => {
-      const allLinks = Array.from(document.querySelectorAll("a, button, vaadin-button, [role='button'], [role='menuitem'], [role='tab']"));
-      return allLinks.map(el => ({
-        tag: el.tagName,
-        text: (el.textContent || "").trim().substring(0, 80),
-        href: (el as HTMLAnchorElement).href || "",
-      })).filter(x => x.text.length > 0).slice(0, 30);
-    });
-
-    addStep(log("nawigacja", "ok",
-      `Dostepne linki/przyciski: ${afterLoginStructure.map(l => `"${l.text}"`).join(", ").substring(0, 500)}`
-    ));
-
-    // Look for anything related to "wniosek", "nabor", "formularz", "zgłoszenie", "rekrutacja"
-    const formNav = await page.evaluate(() => {
-      const keywords = ["wniosek", "nabór", "nabor", "formularz", "zgłoszenie", "zgloszenie", "rekrutacja", "złóż", "zloz", "aplikuj", "zapisz się", "zapisz sie"];
-      const allLinks = Array.from(document.querySelectorAll("a, button, vaadin-button, [role='button'], [role='menuitem'], [role='tab']"));
-      for (const el of allLinks) {
-        const text = (el.textContent || "").trim().toLowerCase();
-        if (keywords.some(kw => text.includes(kw))) {
-          (el as HTMLElement).click();
-          return { found: true, text: (el.textContent || "").trim().substring(0, 60) };
-        }
-      }
-      return { found: false, text: "" };
-    });
-
-    if (formNav.found) {
-      await delay(3000);
-      screenshot = await takeScreenshot(page);
-      addStep(log("nawigacja_formularz", "ok", `Kliknieto: "${formNav.text}". URL: ${page.url()}`, screenshot));
-    }
-
-    // Fill ALL visible form fields aggressively
-    const participantDataForForm = {
-      imie: participant.imie,
-      nazwisko: participant.nazwisko,
-      pesel: participant.pesel,
-      email: participant.email,
-      telefon: participant.telefon,
-      adres: participant.adres,
-      kodPocztowy: participant.kodPocztowy,
-      miasto: participant.miasto,
-    };
-
-    const fillResult = await page.evaluate((p) => {
-      function setVal(input: HTMLInputElement, value: string) {
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        if (nativeSetter) nativeSetter.call(input, value);
-        else input.value = value;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        input.dispatchEvent(new Event('blur', { bubbles: true }));
+      if (hasTypeSelection.radios > 0) {
+        await page.evaluate(() => {
+          const radios = Array.from(document.querySelectorAll("input[type='radio']"));
+          for (const r of radios) {
+            const label = (r.closest("label")?.textContent || r.parentElement?.textContent || "").toLowerCase();
+            if (label.includes("zamieszkanie") || label.includes("zamieszkuj") || label.includes("mieszk")) {
+              (r as HTMLElement).click();
+              return;
+            }
+          }
+          if (radios.length > 0) (radios[0] as HTMLElement).click();
+        });
+        await delay(2000);
+        addStep(log("wybor_typu", "ok", "Wybrano typ wniosku (zamieszkanie)"));
       }
 
-      const fieldMappings: { match: string[]; value: string }[] = [
-        { match: ["imię", "imie", "first_name"], value: p.imie },
-        { match: ["nazwisko", "last_name"], value: p.nazwisko },
-        { match: ["pesel"], value: p.pesel },
-        { match: ["e-mail", "email"], value: p.email },
-        { match: ["telefon", "phone", "tel"], value: p.telefon },
-        { match: ["ulica", "adres", "street"], value: p.adres },
-        { match: ["kod pocztowy", "postal"], value: p.kodPocztowy },
-        { match: ["miasto", "miejscowość"], value: p.miasto },
+      if (hasTypeSelection.selects > 0) {
+        await page.evaluate(() => {
+          const selects = Array.from(document.querySelectorAll("select"));
+          for (const s of selects) {
+            const opts = Array.from((s as HTMLSelectElement).options).filter(o => o.value && o.value !== "");
+            if (opts.length > 0) {
+              (s as HTMLSelectElement).value = opts[0].value;
+              s.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
+        });
+        await delay(2000);
+      }
+
+      // Fill all visible form fields
+      const formInputs = await page.$$("input:not([type='hidden']):not([type='submit']):not([type='radio']):not([type='checkbox']), textarea");
+      const fieldMappings: [string[], string][] = [
+        [["imię", "imie", "first_name", "imie"], participant.imie],
+        [["nazwisko", "last_name"], participant.nazwisko],
+        [["pesel"], participant.pesel],
+        [["e-mail", "email", "mail"], participant.email],
+        [["telefon", "phone", "tel"], participant.telefon],
+        [["ulica", "adres", "street"], participant.adres],
+        [["kod pocztowy", "postal", "kod"], participant.kodPocztowy],
+        [["miasto", "miejscowość", "city"], participant.miasto],
       ];
 
-      let filled = 0;
-      const filledFields: string[] = [];
-      const allInputs = Array.from(document.querySelectorAll("input, textarea, select, vaadin-text-field, vaadin-combo-box, vaadin-date-picker")) as HTMLInputElement[];
+      let filledCount = 0;
+      const filledNames: string[] = [];
 
-      for (const input of allInputs) {
-        if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button') continue;
-        const labelText = (
-          (input.getAttribute("label") || "") + " " +
-          (input.getAttribute("placeholder") || "") + " " +
-          (input.name || "") + " " + (input.id || "") + " " +
-          (input.getAttribute("aria-label") || "") + " " +
-          (input.parentElement?.textContent || "").substring(0, 100)
-        ).toLowerCase();
+      for (const inp of formInputs) {
+        const attrs = await page.evaluate(el => ({
+          name: el.name || "",
+          placeholder: el.placeholder || "",
+          id: el.id || "",
+          type: el.type || "",
+          value: el.value || "",
+          label: el.closest("div")?.querySelector("label")?.textContent?.trim() || "",
+        }), inp);
 
+        if (attrs.value) continue;
+
+        const allText = `${attrs.name} ${attrs.placeholder} ${attrs.id} ${attrs.label}`.toLowerCase();
         let matched = false;
-        for (const mapping of fieldMappings) {
-          if (mapping.match.some(m => labelText.includes(m))) {
-            const target = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
-            if (!target.value || target.value.trim().length === 0) {
-              setVal(target, mapping.value);
+
+        for (const [keywords, value] of fieldMappings) {
+          if (keywords.some(kw => allText.includes(kw))) {
+            const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
+            if (selector) {
+              try {
+                await blazorType(page, selector, value);
+                filledCount++;
+                filledNames.push(keywords[0]);
+                matched = true;
+              } catch {}
             }
-            filled++;
-            filledFields.push(mapping.match[0]);
-            matched = true;
             break;
           }
         }
 
-        // Fill unknown empty required fields with defaults
-        if (!matched && input.tagName !== 'SELECT') {
-          const target = input.shadowRoot?.querySelector("input") as HTMLInputElement || input;
-          if (target && (!target.value || target.value.trim().length === 0) && !target.readOnly && !target.disabled) {
-            if (input.tagName === 'SELECT' || (input as any).tagName === 'VAADIN-COMBO-BOX') {
-              const select = input as HTMLSelectElement;
-              const opts = Array.from(select.options || []).filter(o => o.value && o.value !== "");
-              if (opts.length > 0) { select.value = opts[0].value; select.dispatchEvent(new Event('change', { bubbles: true })); }
-            } else if (input.type !== 'checkbox' && input.type !== 'radio') {
-              setVal(target, "brak");
-              filled++;
-              filledFields.push(`unknown:${labelText.trim().substring(0, 20)}`);
+        if (!matched && attrs.type !== "file") {
+          try {
+            const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
+            if (selector) {
+              await blazorType(page, selector, "brak");
+              filledCount++;
+              filledNames.push(`other:${attrs.name || attrs.id}`);
             }
-          }
+          } catch {}
         }
       }
 
       // Check all checkboxes
-      const cbs = Array.from(document.querySelectorAll("input[type='checkbox'], vaadin-checkbox")) as HTMLInputElement[];
-      for (const cb of cbs) {
-        if (!cb.checked) { cb.click(); filled++; filledFields.push("checkbox"); }
-      }
-
-      return { filled, filledFields };
-    }, participantDataForForm);
-
-    addStep(log("formularz_wypelnienie", fillResult.filled > 0 ? "ok" : "skip",
-      `Wypelniono ${fillResult.filled} pol: [${fillResult.filledFields.join(", ")}]`));
-
-    if (autoSubmit) {
-      // Try to submit
-      const submitResult = await page.evaluate(() => {
-        const keywords = ["wyślij", "wyslij", "zapisz", "zatwierdź", "zatwierdz", "złóż", "zloz", "submit", "dalej", "ok"];
-        const buttons = Array.from(document.querySelectorAll("button, vaadin-button, input[type='submit'], a[class*='btn'], [role='button']"));
-        for (const btn of buttons) {
-          const text = (btn.textContent || "").trim().toLowerCase();
-          if (keywords.some(kw => text.includes(kw))) {
-            (btn as HTMLElement).click();
-            return { clicked: true, text: (btn.textContent || "").trim().substring(0, 60) };
-          }
+      await page.evaluate(() => {
+        const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
+        for (const cb of cbs) {
+          if (!cb.checked && !cb.disabled) { cb.click(); }
         }
-        return { clicked: false, text: "" };
       });
 
-      await delay(3000);
-      screenshot = await takeScreenshot(page);
+      // Select first option in selects
+      await page.evaluate(() => {
+        const selects = Array.from(document.querySelectorAll("select"));
+        for (const s of selects) {
+          const opts = Array.from((s as HTMLSelectElement).options).filter(o => o.value && o.value !== "" && o.value !== "0");
+          if (opts.length > 0 && !(s as HTMLSelectElement).value) {
+            (s as HTMLSelectElement).value = opts[0].value;
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+      });
 
-      if (submitResult.clicked) {
-        addStep(log("wyslanie_wniosku", "ok", `Kliknieto: "${submitResult.text}". URL: ${page.url()}`, screenshot));
-        status = "completed";
+      screenshot = await takeScreenshot(page);
+      addStep(log("formularz_wypelnienie", filledCount > 0 ? "ok" : "skip",
+        `Wypelniono ${filledCount} pol: [${filledNames.join(", ")}]. URL: ${page.url()}`,
+        screenshot));
+
+      if (autoSubmit) {
+        // Look for submit button
+        const submitResult = await page.evaluate(() => {
+          const keywords = ["złóż wniosek", "zloz wniosek", "wyślij", "wyslij", "zapisz", "zatwierdź", "submit"];
+          const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
+          for (const btn of btns) {
+            const t = (btn.textContent || "").trim().toLowerCase();
+            if (keywords.some(kw => t.includes(kw))) {
+              (btn as HTMLElement).click();
+              return { clicked: true, text: (btn.textContent || "").trim() };
+            }
+          }
+          return { clicked: false, text: "" };
+        });
+
+        await delay(5000);
+        screenshot = await takeScreenshot(page);
+
+        if (submitResult.clicked) {
+          addStep(log("wyslanie_wniosku", "ok",
+            `Kliknieto "${submitResult.text}". URL: ${page.url()}`, screenshot));
+          status = "completed";
+        } else {
+          addStep(log("wyslanie_wniosku", "skip",
+            `Nie znaleziono przycisku wyslania. URL: ${page.url()}`, screenshot));
+          status = "stopped";
+        }
       } else {
-        addStep(log("wyslanie_wniosku", "skip", `Nie znaleziono przycisku wyslania. URL: ${page.url()}`, screenshot));
+        screenshot = await takeScreenshot(page);
+        addStep(log("stop_przed_wyslaniem", "stop", "Automatyczne wyslanie wylaczone.", screenshot));
         status = "stopped";
       }
     } else {
-      screenshot = await takeScreenshot(page);
-      addStep(log("stop_przed_wyslaniem", "stop", "Automatyczne wyslanie wylaczone.", screenshot));
+      addStep(log("klik_zloz_wniosek", "skip",
+        `Nie znaleziono przycisku "Zloz wniosek" w tabeli naborow. URL: ${page.url()}`, screenshot));
       status = "stopped";
     }
 
   } catch (err: any) {
-    steps.push(log("blad_krytyczny", "error", `Blad: ${err.message}`));
+    if (!steps.some(s => s.status === "error")) {
+      steps.push(log("blad_krytyczny", "error", `Blad: ${err.message}`));
+    }
     status = "error";
   } finally {
     if (browser) {

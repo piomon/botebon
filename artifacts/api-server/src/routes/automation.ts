@@ -186,4 +186,20 @@ router.post("/automation/run-single-sync/:id", async (req, res): Promise<void> =
   }
 });
 
+router.post("/automation/explore-fst", async (req, res): Promise<void> => {
+  const { login, password } = req.body || {};
+  if (!login || !password) {
+    res.status(400).json({ error: "Wymagane login i password" });
+    return;
+  }
+
+  try {
+    const { exploreFstPortal } = await import("../automation/browser");
+    const result = await exploreFstPortal(login, password);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
