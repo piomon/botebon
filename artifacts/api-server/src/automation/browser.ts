@@ -1856,6 +1856,8 @@ async function fstPreloginSingle(
 
   try {
     const page = await browser.newPage();
+    page.setDefaultTimeout(60000);
+    page.setDefaultNavigationTimeout(60000);
     await page.setViewport({ width: 1280, height: 900 });
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
@@ -1874,64 +1876,60 @@ async function fstPreloginSingle(
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await page.goto("https://fst-lodzkie.teradane.com/Login", { waitUntil: "networkidle2", timeout: 60000 });
+        await page.goto("https://fst-lodzkie.teradane.com/Login", { waitUntil: "domcontentloaded", timeout: 45000 });
         break;
       } catch (navErr: any) {
         if (attempt === 3) throw navErr;
         await delay(2000);
       }
     }
-    await delay(2000);
+    await delay(1500);
 
-    async function blazorType(sel: string, value: string) {
-      await page.click(sel, { clickCount: 3 });
-      await page.keyboard.press("Backspace");
-      await page.type(sel, value, { delay: 20 });
-      await page.evaluate((s, v) => {
-        const el = document.querySelector(s) as HTMLInputElement;
-        if (el) {
-          el.value = v;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          el.dispatchEvent(new Event('blur', { bubbles: true }));
-        }
-      }, sel, value);
-      await delay(100);
-    }
-
-    await blazorType('input[name="model.Email"]', participant.loginPortal);
-    await blazorType('input[name="model.Haslo"]', participant.haslo);
+    await safeEval(page, (email: string, pass: string) => {
+      const emailInput = document.querySelector('input[name="model.Email"]') as HTMLInputElement;
+      const passInput = document.querySelector('input[name="model.Haslo"]') as HTMLInputElement;
+      if (emailInput) {
+        emailInput.focus();
+        emailInput.value = email;
+        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+        emailInput.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+      if (passInput) {
+        passInput.focus();
+        passInput.value = pass;
+        passInput.dispatchEvent(new Event('input', { bubbles: true }));
+        passInput.dispatchEvent(new Event('change', { bubbles: true }));
+        passInput.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    }, participant.loginPortal, participant.haslo);
     addStep(log("prelogin_login_fill", "ok", `Wypelniono: ${participant.loginPortal}`));
 
-    await page.click("button.btn-primary");
-    await delay(6000);
+    await safeEval(page, () => {
+      const btn = document.querySelector("button.btn-primary") as HTMLElement;
+      if (btn) btn.click();
+    });
+    await delay(5000);
 
     const currentUrl = page.url();
     if (currentUrl.toLowerCase().includes("/login")) {
-      const errorMsg = await page.evaluate(() => {
+      const errorMsg = await safeEval(page, () => {
         const alerts = document.querySelectorAll(".alert, .text-danger, .validation-message");
         return Array.from(alerts).map(a => a.textContent?.trim()).filter(t => t).join("; ");
-      });
+      }) || "";
       throw new Error(`Logowanie nieudane: ${errorMsg || "brak bledu"}`);
     }
-    let screenshot = await takeScreenshot(page);
-    addStep(log("prelogin_login_ok", "ok", `Zalogowano. URL: ${currentUrl}`, screenshot));
+    addStep(log("prelogin_login_ok", "ok", `Zalogowano. URL: ${currentUrl}`));
 
     await safeEval(page, () => {
       const links = Array.from(document.querySelectorAll("a"));
       for (const link of links) {
         const text = (link.textContent || "").trim();
-        if (text === "Złóż wniosek") {
-          (link as HTMLElement).click();
-          return;
-        }
+        if (text === "Złóż wniosek") { (link as HTMLElement).click(); return; }
       }
       for (const link of links) {
         const href = link.getAttribute("href") || "";
-        if (href.toLowerCase() === "nabory") {
-          (link as HTMLElement).click();
-          return;
-        }
+        if (href.toLowerCase() === "nabory") { (link as HTMLElement).click(); return; }
       }
     });
     await delay(4000);
@@ -1939,14 +1937,13 @@ async function fstPreloginSingle(
     for (let waitAttempt = 0; waitAttempt < 5; waitAttempt++) {
       const hasContent = await safeEval(page, () => {
         const body = document.body?.innerText || "";
-        return body.includes("Nabór") || body.includes("nabór") || body.includes("Złóż") || body.includes("Wybierz");
+        return body.includes("Nabór") || body.includes("nabór") || body.includes("Złóż") || body.includes("Wybierz") || body.includes("wniosek");
       });
       if (hasContent) break;
       await delay(2000);
     }
 
-    addStep(log("prelogin_ready", "ok",
-      `Gotowy na: ${page.url()}`));
+    addStep(log("prelogin_ready", "ok", `Gotowy na: ${page.url()}`));
 
     session.status = "ready";
     session.readyAt = new Date().toISOString();
