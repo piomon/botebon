@@ -1747,6 +1747,847 @@ export async function runFstAutomationForParticipant(
   };
 }
 
+// ========== FST TWO-PHASE SYSTEM: Pre-login + Submit ==========
+// Uses ONE shared browser with MULTIPLE TABS (pages) to save memory
+
+export interface FstSession {
+  participantId: number;
+  imie: string;
+  nazwisko: string;
+  loginPortal: string;
+  page: Page;
+  status: "logging_in" | "ready" | "submitting" | "done" | "error";
+  error?: string;
+  steps: StepLog[];
+  readyAt?: string;
+}
+
+let fstSharedBrowser: Browser | null = null;
+const fstSessions: Map<number, FstSession> = new Map();
+
+export function getFstSessions(): Map<number, FstSession> {
+  return fstSessions;
+}
+
+export function getFstSessionsStatus(): Array<{
+  participantId: number;
+  imie: string;
+  nazwisko: string;
+  loginPortal: string;
+  status: string;
+  error?: string;
+  readyAt?: string;
+  stepsCount: number;
+  lastStep?: string;
+}> {
+  const result: any[] = [];
+  fstSessions.forEach((s, pid) => {
+    result.push({
+      participantId: pid,
+      imie: s.imie,
+      nazwisko: s.nazwisko,
+      loginPortal: s.loginPortal,
+      status: s.status,
+      error: s.error,
+      readyAt: s.readyAt,
+      stepsCount: s.steps.length,
+      lastStep: s.steps.length > 0 ? `${s.steps[s.steps.length - 1].step}: ${s.steps[s.steps.length - 1].message.substring(0, 100)}` : undefined,
+    });
+  });
+  return result;
+}
+
+async function ensureSharedBrowser(): Promise<Browser> {
+  if (fstSharedBrowser) {
+    try {
+      const pages = await fstSharedBrowser.pages();
+      if (pages) return fstSharedBrowser;
+    } catch {}
+  }
+  const chromiumPath = findChromiumPath();
+  fstSharedBrowser = await puppeteer.launch({
+    headless: "shell" as any,
+    executablePath: chromiumPath,
+    args: [
+      "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+      "--disable-gpu", "--no-zygote", "--disable-extensions",
+      "--disable-background-networking", "--disable-default-apps",
+      "--disable-sync", "--disable-translate",
+      "--metrics-recording-only", "--mute-audio", "--no-first-run",
+      "--js-flags=--max-old-space-size=256",
+      "--window-size=1280,900", "--disable-features=site-per-process",
+    ],
+    protocolTimeout: 180000,
+    timeout: 60000,
+  });
+  return fstSharedBrowser;
+}
+
+async function fstPreloginSingle(
+  browser: Browser,
+  participant: ParticipantData,
+  onProgress?: ProgressCallback,
+): Promise<{ success: boolean; error?: string; steps: StepLog[] }> {
+  const steps: StepLog[] = [];
+  const addStep = (s: StepLog) => {
+    steps.push(s);
+    onProgress?.(participant.id, s);
+  };
+
+  const existing = fstSessions.get(participant.id);
+  if (existing && (existing.status === "ready" || existing.status === "submitting")) {
+    return { success: true, steps: [log("prelogin", "skip", "Sesja juz aktywna")] };
+  }
+  if (existing) {
+    try { await existing.page.close(); } catch {}
+    fstSessions.delete(participant.id);
+  }
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+    const session: FstSession = {
+      participantId: participant.id,
+      imie: participant.imie,
+      nazwisko: participant.nazwisko,
+      loginPortal: participant.loginPortal,
+      page,
+      status: "logging_in",
+      steps,
+    };
+    fstSessions.set(participant.id, session);
+
+    addStep(log("prelogin_init", "ok", `Otwarto zakladke dla ${participant.imie} ${participant.nazwisko}`));
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto("https://fst-lodzkie.teradane.com/Login", { waitUntil: "networkidle2", timeout: 60000 });
+        break;
+      } catch (navErr: any) {
+        if (attempt === 3) throw navErr;
+        await delay(2000);
+      }
+    }
+    await delay(2000);
+
+    async function blazorType(sel: string, value: string) {
+      await page.click(sel, { clickCount: 3 });
+      await page.keyboard.press("Backspace");
+      await page.type(sel, value, { delay: 20 });
+      await page.evaluate((s, v) => {
+        const el = document.querySelector(s) as HTMLInputElement;
+        if (el) {
+          el.value = v;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        }
+      }, sel, value);
+      await delay(100);
+    }
+
+    await blazorType('input[name="model.Email"]', participant.loginPortal);
+    await blazorType('input[name="model.Haslo"]', participant.haslo);
+    addStep(log("prelogin_login_fill", "ok", `Wypelniono: ${participant.loginPortal}`));
+
+    await page.click("button.btn-primary");
+    await delay(6000);
+
+    const currentUrl = page.url();
+    if (currentUrl.toLowerCase().includes("/login")) {
+      const errorMsg = await page.evaluate(() => {
+        const alerts = document.querySelectorAll(".alert, .text-danger, .validation-message");
+        return Array.from(alerts).map(a => a.textContent?.trim()).filter(t => t).join("; ");
+      });
+      throw new Error(`Logowanie nieudane: ${errorMsg || "brak bledu"}`);
+    }
+    let screenshot = await takeScreenshot(page);
+    addStep(log("prelogin_login_ok", "ok", `Zalogowano. URL: ${currentUrl}`, screenshot));
+
+    await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll("a"));
+      for (const link of links) {
+        const text = (link.textContent || "").trim();
+        if (text === "Złóż wniosek") {
+          (link as HTMLElement).click();
+          return;
+        }
+      }
+      for (const link of links) {
+        const href = link.getAttribute("href") || "";
+        if (href.toLowerCase() === "nabory") {
+          (link as HTMLElement).click();
+          return;
+        }
+      }
+    });
+    await delay(6000);
+
+    for (let waitAttempt = 0; waitAttempt < 5; waitAttempt++) {
+      const hasContent = await page.evaluate(() => {
+        const body = document.body?.innerText || "";
+        return body.includes("Nabór") || body.includes("nabór") || body.includes("Złóż") || body.includes("Wybierz");
+      });
+      if (hasContent) break;
+      await delay(3000);
+    }
+
+    screenshot = await takeScreenshot(page);
+    const pageInfo = await page.evaluate(() => ({
+      url: window.location.href,
+      text: document.body?.innerText?.substring(0, 500) || "",
+    }));
+
+    addStep(log("prelogin_ready", "ok",
+      `Gotowy: ${pageInfo.url}. Tekst: ${pageInfo.text.substring(0, 150)}`,
+      screenshot));
+
+    session.status = "ready";
+    session.readyAt = new Date().toISOString();
+    return { success: true, steps };
+
+  } catch (err: any) {
+    addStep(log("prelogin_error", "error", `Blad: ${err.message}`));
+    const session = fstSessions.get(participant.id);
+    if (session) {
+      session.status = "error";
+      session.error = err.message;
+    }
+    return { success: false, error: err.message, steps };
+  }
+}
+
+export async function fstPreloginAll(
+  participants: ParticipantData[],
+  onProgress?: ProgressCallback,
+  concurrency = 2,
+): Promise<Array<{ participantId: number; success: boolean; error?: string }>> {
+  const browser = await ensureSharedBrowser();
+  const results: Array<{ participantId: number; success: boolean; error?: string }> = [];
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < participants.length) {
+      const idx = nextIndex++;
+      const p = participants[idx];
+      console.log(`[fst-prelogin] Starting ${p.imie} ${p.nazwisko} (${idx + 1}/${participants.length})`);
+      const result = await fstPreloginSingle(browser, p, onProgress);
+      results.push({ participantId: p.id, success: result.success, error: result.error });
+    }
+  }
+
+  const workerCount = Math.min(concurrency, participants.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+export async function fstSubmitParticipant(
+  participant: ParticipantData,
+  onProgress?: ProgressCallback,
+  autoSubmit = true,
+): Promise<AutomationResult> {
+  const startedAt = new Date().toISOString();
+  const session = fstSessions.get(participant.id);
+
+  if (!session || session.status !== "ready") {
+    return {
+      participantId: participant.id,
+      imie: participant.imie,
+      nazwisko: participant.nazwisko,
+      loginPortal: participant.loginPortal,
+      status: "error",
+      steps: [log("submit_error", "error", `Brak gotowej sesji (status: ${session?.status || "nie istnieje"})`)],
+      startedAt,
+      finishedAt: new Date().toISOString(),
+    };
+  }
+
+  session.status = "submitting";
+  const page = session.page;
+  const steps: StepLog[] = [...session.steps];
+  let status: AutomationResult["status"] = "completed";
+
+  const addStep = (s: StepLog) => {
+    steps.push(s);
+    session.steps.push(s);
+    onProgress?.(participant.id, s);
+  };
+
+  async function blazorType(sel: string, value: string) {
+    await page.click(sel, { clickCount: 3 });
+    await page.keyboard.press("Backspace");
+    await page.type(sel, value, { delay: 20 });
+    await page.evaluate((s, v) => {
+      const el = document.querySelector(s) as HTMLInputElement;
+      if (el) {
+        el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    }, sel, value);
+    await delay(100);
+  }
+
+  try {
+    await page.evaluate(() => {
+      const content = document.querySelector("article, .content, main") || document.body;
+      if (content) (content as HTMLElement).click();
+    });
+    await delay(1000);
+
+    const currentPageText = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || "");
+    const currentUrl = page.url();
+    let screenshot = await takeScreenshot(page);
+
+    addStep(log("submit_start", "ok",
+      `Rozpoczynam skladanie wniosku. URL: ${currentUrl}. Tekst: ${currentPageText.substring(0, 150)}`,
+      screenshot));
+
+    const needsRefresh = currentPageText.includes("Brak aktualnych naborów");
+    if (needsRefresh) {
+      await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll("a"));
+        const homeLink = links.find(l => l.getAttribute("href") === "" || l.getAttribute("href") === "/");
+        if (homeLink) (homeLink as HTMLElement).click();
+      });
+      await delay(2000);
+      await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll("a"));
+        for (const link of links) {
+          const text = (link.textContent || "").trim();
+          if (text === "Złóż wniosek") { (link as HTMLElement).click(); return; }
+        }
+        for (const link of links) {
+          if ((link.getAttribute("href") || "").toLowerCase() === "nabory") { (link as HTMLElement).click(); return; }
+        }
+      });
+      await delay(6000);
+
+      for (let waitAttempt = 0; waitAttempt < 10; waitAttempt++) {
+        const hasNabor = await page.evaluate(() => {
+          const body = document.body?.innerText || "";
+          return !body.includes("Brak aktualnych naborów") && (body.includes("Złóż") || body.includes("wniosek"));
+        });
+        if (hasNabor) break;
+        await delay(3000);
+      }
+    }
+
+    screenshot = await takeScreenshot(page);
+    const afterRefreshText = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || "");
+
+    if (afterRefreshText.includes("Brak aktualnych naborów")) {
+      addStep(log("submit_no_nabor", "error", "Nadal brak aktualnych naborow po odswiezeniu", screenshot));
+      session.status = "error";
+      session.error = "Brak aktualnych naborow";
+      return {
+        participantId: participant.id,
+        imie: participant.imie,
+        nazwisko: participant.nazwisko,
+        loginPortal: participant.loginPortal,
+        status: "error",
+        steps,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+      };
+    }
+
+    let zlozResult = await page.evaluate(() => {
+      const keywords = ["złóż wniosek", "kontynuuj", "edytuj wniosek", "przejdź do wniosku", "otwórz"];
+      const nonNavElements = Array.from(document.querySelectorAll("button, a, input[type='submit'], td a, td button")).filter(
+        b => !(b as Element).closest("nav") && !(b as Element).closest(".navbar") && !b.classList.contains("nav-link")
+      );
+      for (const kw of keywords) {
+        for (const el of nonNavElements) {
+          const t = (el.textContent || "").trim().toLowerCase();
+          if (t.includes(kw)) {
+            (el as HTMLElement).click();
+            return { clicked: true, text: (el.textContent || "").trim() };
+          }
+        }
+      }
+      for (const el of nonNavElements) {
+        const cls = (el as Element).className || "";
+        if (cls.includes("btn-primary") || cls.includes("btn-danger") || cls.includes("btn-success") || cls.includes("btn-warning")) {
+          (el as HTMLElement).click();
+          return { clicked: true, text: (el.textContent || "").trim() + " (color-btn)" };
+        }
+      }
+      const tableBtn = document.querySelector("table button, table a, .card button, .card a");
+      if (tableBtn) {
+        (tableBtn as HTMLElement).click();
+        return { clicked: true, text: (tableBtn.textContent || "").trim() + " (table-btn)" };
+      }
+      return { clicked: false, text: "" };
+    });
+
+    await delay(5000);
+    screenshot = await takeScreenshot(page);
+
+    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 3000) || "");
+    const formCheckUrl = page.url().toLowerCase();
+    const alreadySubmitted = pageText.toLowerCase().includes("złożono wniosek w projekcie");
+    const alreadyOnForm = formCheckUrl.includes("wybierzrodzajwniosku") || formCheckUrl.includes("mieszkamlodzkie") || formCheckUrl.includes("formularz");
+    const hasFormElements = await page.evaluate(() => document.querySelectorAll("select").length >= 2);
+
+    if (alreadySubmitted) {
+      addStep(log("wniosek_juz_zlozony", "ok", `Wniosek juz zlozony wczesniej. URL: ${page.url()}`, screenshot));
+      session.status = "done";
+      return {
+        participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
+        loginPortal: participant.loginPortal, status: "completed", steps, startedAt, finishedAt: new Date().toISOString(),
+      };
+    }
+
+    if (!zlozResult.clicked && !alreadyOnForm && !hasFormElements) {
+      addStep(log("submit_no_button", "error", `Nie znaleziono przycisku do zlozenia wniosku. URL: ${page.url()}`, screenshot));
+      session.status = "error";
+      return {
+        participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
+        loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString(),
+      };
+    }
+
+    addStep(log("submit_klik", zlozResult.clicked ? "ok" : "skip",
+      zlozResult.clicked ? `Kliknieto "${zlozResult.text}". URL: ${page.url()}` : `Juz na formularzu. URL: ${page.url()}`, screenshot));
+
+    await delay(3000);
+    screenshot = await takeScreenshot(page);
+
+    // ===== STEP 1 FORM: Two dropdowns + US PDF upload + "Przejdz dalej" =====
+    const step1Selects = await page.evaluate(() => {
+      const selects = Array.from(document.querySelectorAll("select"));
+      return selects.map((s, i) => {
+        if (!s.id) s.id = `__fst_s1_${i}_${Date.now()}`;
+        const opts = Array.from((s as HTMLSelectElement).options).map(o => ({ value: o.value, text: o.text }));
+        return { id: s.id, opts: opts.filter(o => o.value && o.value !== "" && o.value !== "0") };
+      });
+    });
+
+    const step1Log: string[] = [];
+    for (let i = 0; i < step1Selects.length; i++) {
+      const sel = step1Selects[i];
+      if (sel.opts.length === 0) continue;
+      let chosen;
+      if (i === 0) {
+        chosen = sel.opts.find(o => o.text.toLowerCase().includes("nie prowadzę") || o.text.toLowerCase().includes("działalności")) || sel.opts[0];
+      } else {
+        chosen = sel.opts.find(o => o.text.toLowerCase().includes("mieszkam")) || sel.opts[0];
+      }
+      try {
+        await page.select(`#${sel.id}`, chosen.value);
+        step1Log.push(`${i === 0 ? "działalność" : "rodzaj"}=${chosen.text.substring(0, 40)}`);
+      } catch {
+        step1Log.push(`${i}_error`);
+      }
+      await delay(1000);
+    }
+    addStep(log("submit_step1_selecty", "ok", `Dropdowny: [${step1Log.join(", ")}]`, screenshot));
+
+    const dummyPdfPath = "/tmp/dummy_zaswiadczenie.pdf";
+    const fileInputsStep1 = await page.$$("input[type='file']");
+    if (fileInputsStep1.length > 0) {
+      try {
+        await fileInputsStep1[0].uploadFile(dummyPdfPath);
+        await delay(2000);
+        addStep(log("submit_step1_upload", "ok", "Zaladowano PDF (zaswiadczenie US)"));
+      } catch (e: any) {
+        addStep(log("submit_step1_upload", "skip", `Upload: ${e.message}`));
+      }
+    }
+
+    const przejdzResult = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
+      for (const btn of btns) {
+        const t = (btn.textContent || "").trim().toLowerCase();
+        if (t.includes("przejdź dalej") || t.includes("przejdz dalej") || t.includes("dalej")) {
+          (btn as HTMLElement).click();
+          return { clicked: true, text: (btn.textContent || "").trim() };
+        }
+      }
+      return { clicked: false, text: "" };
+    });
+
+    if (przejdzResult.clicked) {
+      await delay(6000);
+      screenshot = await takeScreenshot(page);
+      addStep(log("submit_przejdz_dalej", "ok", `Kliknieto "${przejdzResult.text}". URL: ${page.url()}`, screenshot));
+    } else {
+      screenshot = await takeScreenshot(page);
+      addStep(log("submit_przejdz_dalej", "error", `Nie znaleziono "Przejdz dalej". URL: ${page.url()}`, screenshot));
+      status = "error";
+      session.status = "error";
+      return {
+        participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
+        loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString(),
+      };
+    }
+
+    // ===== STEP 2 FORM: Address cascading selects + text fields + uploads + status selects + checkboxes =====
+    await delay(3000);
+
+    const adresMatch = participant.adres.match(/^ul\.?\s*(.+?)\s+(\d+.*)$/i);
+    const ulicaName = adresMatch ? adresMatch[1] : participant.adres.replace(/^ul\.?\s*/i, "");
+    const numerDomuLokalu = adresMatch ? adresMatch[2] : "";
+
+    async function blazorSelectByIndex(selectIndex: number, searchText: string, waitMs = 3000) {
+      const info = await page.evaluate((idx) => {
+        const selects = Array.from(document.querySelectorAll("select"));
+        if (idx >= selects.length) return { exists: false, id: "", optCount: 0, opts: [] as string[] };
+        const s = selects[idx] as HTMLSelectElement;
+        if (!s.id) s.id = `__fst_s2_${idx}_${Date.now()}`;
+        const opts = Array.from(s.options).map(o => ({ value: o.value, text: o.text }));
+        return { exists: true, id: s.id, optCount: opts.length, opts: opts.filter(o => o.value && o.value !== "" && o.value !== "0") };
+      }, selectIndex);
+
+      if (!info.exists) return { ok: false, msg: `select[${selectIndex}] nie istnieje` };
+      if (info.opts.length === 0) return { ok: false, msg: `select[${selectIndex}] brak opcji` };
+
+      const match = info.opts.find(o => o.text.toLowerCase().includes(searchText.toLowerCase()));
+      const chosen = match || info.opts[0];
+
+      try {
+        await page.select(`#${info.id}`, chosen.value);
+        await page.evaluate((id) => {
+          const el = document.getElementById(id) as HTMLSelectElement;
+          if (el) {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }, info.id);
+      } catch {
+        await page.evaluate((id, val) => {
+          const el = document.getElementById(id) as HTMLSelectElement;
+          if (el) { el.value = val; el.dispatchEvent(new Event('change', { bubbles: true })); }
+        }, info.id, chosen.value);
+      }
+      await delay(waitMs);
+      return { ok: true, msg: match ? chosen.text : `fallback: ${chosen.text}` };
+    }
+
+    const addrLog: string[] = [];
+
+    const woj = await blazorSelectByIndex(0, "łódzkie", 5000);
+    addrLog.push(`woj: ${woj.msg}`);
+
+    const powiatSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" :
+                         participant.miasto.toLowerCase() === "maków" ? "skierniewi" : participant.miasto;
+    for (let retry = 0; retry < 3; retry++) {
+      const pow = await blazorSelectByIndex(1, powiatSearch, 5000);
+      addrLog.push(`powiat: ${pow.msg}`);
+      if (pow.ok) break;
+      await delay(3000);
+    }
+
+    const gminaSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto;
+    for (let retry = 0; retry < 3; retry++) {
+      const gm = await blazorSelectByIndex(2, gminaSearch, 5000);
+      addrLog.push(`gmina: ${gm.msg}`);
+      if (gm.ok) break;
+      await delay(3000);
+    }
+
+    for (let retry = 0; retry < 3; retry++) {
+      const mc = await blazorSelectByIndex(3, participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto, 5000);
+      addrLog.push(`miejscowosc: ${mc.msg}`);
+      if (mc.ok) break;
+      await delay(3000);
+    }
+
+    for (let retry = 0; retry < 3; retry++) {
+      const ul = await blazorSelectByIndex(4, ulicaName, 4000);
+      addrLog.push(`ulica: ${ul.msg}`);
+      if (ul.ok) break;
+      await delay(3000);
+    }
+
+    addStep(log("submit_adres", "ok", `Adres: [${addrLog.join("; ")}]`));
+
+    const textInputs = await page.$$("input[type='text']:not([readonly]):not([disabled])");
+    const textLog: string[] = [];
+
+    for (const inp of textInputs) {
+      const attrs = await page.evaluate(el => ({
+        name: el.name || "",
+        id: el.id || "",
+        placeholder: el.placeholder || "",
+        value: el.value || "",
+        parentText: (() => {
+          let node: Element | null = el;
+          let text = "";
+          for (let i = 0; i < 3 && node; i++) {
+            node = node.parentElement;
+            if (node) {
+              const label = node.querySelector("label, strong, b, h5, h6");
+              if (label) { text += " " + (label.textContent || ""); }
+            }
+          }
+          return (text + " " + (el.previousElementSibling?.textContent || "")).toLowerCase().substring(0, 200);
+        })(),
+      }), inp);
+
+      if (attrs.value) continue;
+      const allText = `${attrs.name} ${attrs.id} ${attrs.placeholder} ${attrs.parentText}`;
+      const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
+      if (!selector) continue;
+
+      try {
+        if (allText.includes("numer dom") || allText.includes("domu") || allText.includes("lokalu") || allText.includes("nr dom") || allText.includes("budyn")) {
+          await blazorType(selector, numerDomuLokalu || "1");
+          textLog.push("numer_domu_lokalu");
+        } else if (allText.includes("kod") || allText.includes("poczt")) {
+          await blazorType(selector, participant.kodPocztowy);
+          textLog.push("kod_pocztowy");
+        } else if (allText.includes("szkoł") || allText.includes("szkol") || allText.includes("uczelni") || allText.includes("nauk") || allText.includes("pobierania")) {
+          await blazorType(selector, "Brak");
+          textLog.push("nazwa_szkoly");
+        } else {
+          await blazorType(selector, "Brak");
+          textLog.push(`other:${attrs.name || attrs.id}`);
+        }
+      } catch {}
+    }
+
+    const textareas = await page.$$("textarea:not([readonly]):not([disabled])");
+    for (const ta of textareas) {
+      const hasValue = await page.evaluate(el => !!(el as HTMLTextAreaElement).value, ta);
+      if (!hasValue) {
+        try {
+          const taSelector = await page.evaluate(el => {
+            return el.name ? `textarea[name="${el.name}"]` : el.id ? `textarea#${el.id}` : null;
+          }, ta);
+          if (taSelector) {
+            await blazorType(taSelector, "Brak");
+            textLog.push("textarea_inne");
+          }
+        } catch {}
+      }
+    }
+
+    addStep(log("submit_pola_tekstowe", "ok", `Pola: [${textLog.join(", ")}]`));
+
+    const allFileInputs = await page.$$("input[type='file']");
+    let uploadCount = 0;
+    for (const fi of allFileInputs) {
+      try {
+        await fi.uploadFile(dummyPdfPath);
+        uploadCount++;
+        await delay(2000);
+      } catch {}
+    }
+    addStep(log("submit_uploads", "ok", `Zaladowano ${uploadCount}/${allFileInputs.length} plikow PDF`));
+
+    const selectsInfo = await page.evaluate((notatkiRaw) => {
+      const selects = Array.from(document.querySelectorAll("select"));
+      const toFill: { id: string; value: string; label: string }[] = [];
+      const notatki = notatkiRaw.toLowerCase();
+
+      for (let i = 0; i < selects.length; i++) {
+        const s = selects[i] as HTMLSelectElement;
+        if (s.value && s.value !== "" && s.value !== "0") continue;
+        if (!s.id) s.id = `__fst_status_${i}_${Date.now()}`;
+        const parent = s.closest(".form-group, .mb-3, .col, div") || s.parentElement;
+        const nearby = (parent?.textContent || "").toLowerCase().substring(0, 300);
+        const prevText = (s.previousElementSibling?.textContent || "").toLowerCase();
+        const labelText = `${nearby} ${prevText}`;
+        const opts = Array.from(s.options);
+
+        let chosen: { value: string; text: string } | null = null;
+        let fieldName = "";
+
+        if (labelText.includes("rynku pracy") || labelText.includes("status wnioskodawcy na rynku")) {
+          fieldName = "status_pracy";
+          if (notatki.includes("zatrudnion")) chosen = opts.find(o => o.text.toLowerCase().includes("zatrudnion")) || null;
+          if (!chosen && (notatki.includes("bezrobotn") || notatki.includes("zarejestrowana w pup") || notatki.includes("zarejestrowana w up") || notatki.includes("urzędzie pracy") || notatki.includes("urzedzie pracy")))
+            chosen = opts.find(o => o.text.toLowerCase().includes("bezrobotn") && o.text.toLowerCase().includes("pup")) || null;
+          if (!chosen && notatki.includes("urzędzie pracy"))
+            chosen = opts.find(o => o.text.toLowerCase().includes("zatrudnion")) || null;
+          if (!chosen) chosen = opts.find(o => o.text.toLowerCase().includes("bezrobotn")) || null;
+        } else if (labelText.includes("wykształcen") || labelText.includes("wyksztalcen") || labelText.includes("isced")) {
+          fieldName = "wyksztalcenie";
+          if (notatki.includes("brak formal")) chosen = opts.find(o => o.text.toLowerCase().includes("isced 0") || o.text.toLowerCase().includes("brak")) || null;
+          else if (notatki.includes("zawodowe")) chosen = opts.find(o => o.text.toLowerCase().includes("zawodow")) || null;
+          else if (notatki.includes("średnie niepełne") || notatki.includes("srednie niepelne")) chosen = opts.find(o => o.text.toLowerCase().includes("gimnazjaln")) || null;
+          else if (notatki.includes("średnie") || notatki.includes("srednie")) chosen = opts.find(o => o.text.toLowerCase().includes("ponadgimnazjaln") || o.text.toLowerCase().includes("isced 3")) || null;
+          if (!chosen) chosen = opts.find(o => o.text.toLowerCase().includes("isced 0") || o.text.toLowerCase().includes("brak")) || null;
+        } else if (labelText.includes("niepełnospraw") || labelText.includes("niepelnospraw")) {
+          fieldName = "niepelnosprawnosc";
+          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+        } else if (labelText.includes("mniejszoś") || labelText.includes("mniejszos") || labelText.includes("etniczn")) {
+          fieldName = "mniejszosc";
+          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+        } else if (labelText.includes("obcego pochodzen")) {
+          fieldName = "obce_pochodzenie";
+          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+        } else if (labelText.includes("bezdomn") || labelText.includes("wykluczeni")) {
+          fieldName = "bezdomnosc";
+          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+        } else if (labelText.includes("pomocy społ") || labelText.includes("pomocy spol") || labelText.includes("świadczeń pomocy")) {
+          fieldName = "pomoc_spol";
+          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
+        } else {
+          fieldName = `other_${i}`;
+          const nonEmpty = opts.filter(o => o.value && o.value !== "" && o.value !== "0");
+          if (nonEmpty.length > 0) chosen = nonEmpty[0];
+        }
+
+        if (chosen) toFill.push({ id: s.id, value: chosen.value, label: `${fieldName}=${chosen.text.substring(0, 50)}` });
+      }
+      return toFill;
+    }, participant.notatki || "");
+
+    const selectsLog: string[] = [];
+    for (const sf of selectsInfo) {
+      try {
+        await page.select(`#${sf.id}`, sf.value);
+        await page.evaluate((id) => {
+          const el = document.getElementById(id) as HTMLSelectElement;
+          if (el) {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }, sf.id);
+        selectsLog.push(sf.label);
+      } catch {
+        await page.evaluate((id, val) => {
+          const el = document.getElementById(id) as HTMLSelectElement;
+          if (el) { el.value = val; el.dispatchEvent(new Event('change', { bubbles: true })); }
+        }, sf.id, sf.value);
+        selectsLog.push(sf.label);
+      }
+      await delay(500);
+    }
+
+    addStep(log("submit_selecty_statusy", "ok", `Selecty: [${selectsLog.join("; ")}]`));
+
+    await page.evaluate(() => {
+      const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
+      for (const cb of cbs) {
+        if (cb.checked || cb.disabled) continue;
+        const parent = cb.closest(".form-group, .mb-3, div, label") || cb.parentElement;
+        const labelText = (parent?.textContent || "").toLowerCase();
+
+        const shouldCheck =
+          labelText.includes("nie potrzebuję") || labelText.includes("nie potrzebuje") ||
+          labelText.includes("dostępnościow") || labelText.includes("zainteresowany") ||
+          labelText.includes("doradztw") || labelText.includes("doradcy zawodowego") ||
+          labelText.includes("akceptuję") || labelText.includes("akceptuje") ||
+          labelText.includes("oświadczen") || labelText.includes("oswiadczen");
+
+        if (shouldCheck) cb.click();
+      }
+    });
+    await delay(1000);
+
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await delay(2000);
+
+    screenshot = await takeScreenshot(page);
+    addStep(log("submit_formularz_gotowy", "ok", `Formularz wypelniony. URL: ${page.url()}`, screenshot));
+
+    if (autoSubmit) {
+      const submitResult = await page.evaluate(() => {
+        const keywords = ["złóż wniosek", "wyślij", "zapisz", "zatwierdź"];
+        const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
+        for (const btn of btns) {
+          const t = (btn.textContent || "").trim().toLowerCase();
+          if (keywords.some(kw => t.includes(kw))) {
+            (btn as HTMLElement).click();
+            return { clicked: true, text: (btn.textContent || "").trim() };
+          }
+        }
+        return { clicked: false, text: "" };
+      });
+
+      await delay(5000);
+      screenshot = await takeScreenshot(page);
+
+      if (submitResult.clicked) {
+        addStep(log("submit_wyslanie", "ok", `Kliknieto "${submitResult.text}". URL: ${page.url()}`, screenshot));
+        status = "completed";
+      } else {
+        addStep(log("submit_wyslanie", "skip", `Nie znaleziono przycisku wyslania. URL: ${page.url()}`, screenshot));
+        status = "stopped";
+      }
+    } else {
+      screenshot = await takeScreenshot(page);
+      addStep(log("submit_stop", "stop", "Automatyczne wyslanie wylaczone.", screenshot));
+      status = "stopped";
+    }
+
+    session.status = "done";
+  } catch (err: any) {
+    if (!steps.some(s => s.status === "error")) {
+      steps.push(log("submit_blad", "error", `Blad: ${err.message}`));
+    }
+    status = "error";
+    session.status = "error";
+    session.error = err.message;
+  }
+
+  return {
+    participantId: participant.id,
+    imie: participant.imie,
+    nazwisko: participant.nazwisko,
+    loginPortal: participant.loginPortal,
+    status,
+    steps,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+  };
+}
+
+export async function fstSubmitAll(
+  participants: ParticipantData[],
+  onProgress?: ProgressCallback,
+  concurrency = 3,
+  autoSubmit = true,
+): Promise<AutomationResult[]> {
+  const results: AutomationResult[] = new Array(participants.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < participants.length) {
+      const idx = nextIndex++;
+      const p = participants[idx];
+      console.log(`[fst-submit] Starting ${p.imie} ${p.nazwisko} (${idx + 1}/${participants.length})`);
+      try {
+        results[idx] = await fstSubmitParticipant(p, onProgress, autoSubmit);
+      } catch (err: any) {
+        results[idx] = {
+          participantId: p.id, imie: p.imie, nazwisko: p.nazwisko, loginPortal: p.loginPortal,
+          status: "error",
+          steps: [{ step: "blad_krytyczny", status: "error", message: `Blad: ${err.message}`, timestamp: new Date().toISOString() }],
+          startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+        };
+      }
+    }
+  }
+
+  const workerCount = Math.min(concurrency, participants.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+export async function fstCleanupAll(): Promise<{ closed: number }> {
+  let closed = 0;
+  for (const [pid, session] of fstSessions) {
+    try {
+      await session.page.close();
+      closed++;
+    } catch {}
+    fstSessions.delete(pid);
+  }
+  if (fstSharedBrowser) {
+    try { await fstSharedBrowser.close(); } catch {}
+    fstSharedBrowser = null;
+  }
+  return { closed };
+}
+
 export type PortalType = "ebon" | "fst";
 
 export async function runAutomationForAll(

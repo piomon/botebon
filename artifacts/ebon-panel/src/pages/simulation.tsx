@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { 
   Play, CheckCircle2, AlertCircle, XCircle, Globe, Lock, 
   Monitor, Loader2, Clock, Users, Zap, StopCircle,
-  ChevronDown, ChevronUp, Image as ImageIcon
+  ChevronDown, ChevronUp, Image as ImageIcon, LogIn, Send, Trash2, RefreshCw
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -31,6 +31,18 @@ interface AutomationResult {
   finishedAt: string;
 }
 
+interface FstSessionInfo {
+  participantId: number;
+  imie: string;
+  nazwisko: string;
+  loginPortal: string;
+  status: string;
+  error?: string;
+  readyAt?: string;
+  stepsCount: number;
+  lastStep?: string;
+}
+
 const NABOR_INFO = {
   name: 'NABOR 9 "Nabor z Bilansem Kompetencji i doradztwem zawodowym"',
   openDate: "2026-04-10T16:00:00+02:00",
@@ -38,15 +50,25 @@ const NABOR_INFO = {
   portal: "https://projektebon.pl",
 };
 
+const FST_NABOR = {
+  name: "Mennica Uslug Szkoleniowych 3",
+  submitDate: "2026-04-14T09:00:00+02:00",
+  portal: "https://fst-lodzkie.teradane.com",
+};
+
 function StatusBadge({ status }: { status: string }) {
-  if (status === "ok") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3" /> OK</span>;
+  if (status === "ok" || status === "completed") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3" /> OK</span>;
   if (status === "error") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800"><XCircle className="h-3 w-3" /> Blad</span>;
   if (status === "skip") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle className="h-3 w-3" /> Pominieto</span>;
-  if (status === "stop") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800"><StopCircle className="h-3 w-3" /> STOP</span>;
+  if (status === "stop" || status === "stopped") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800"><StopCircle className="h-3 w-3" /> STOP</span>;
+  if (status === "ready") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3" /> Gotowy</span>;
+  if (status === "logging_in") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800"><Loader2 className="h-3 w-3 animate-spin" /> Logowanie</span>;
+  if (status === "submitting") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"><Loader2 className="h-3 w-3 animate-spin" /> Skladanie</span>;
+  if (status === "done") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3" /> Gotowe</span>;
   return <span className="text-xs text-muted-foreground">{status}</span>;
 }
 
-function Countdown({ targetDate }: { targetDate: string }) {
+function Countdown({ targetDate, label }: { targetDate: string; label?: string }) {
   const [diff, setDiff] = useState("");
   const [isPast, setIsPast] = useState(false);
 
@@ -57,7 +79,7 @@ function Countdown({ targetDate }: { targetDate: string }) {
       const d = target - now;
       if (d <= 0) {
         setIsPast(true);
-        setDiff("Nabor jest otwarty!");
+        setDiff("CZAS START!");
         return;
       }
       const days = Math.floor(d / (1000 * 60 * 60 * 24));
@@ -73,7 +95,7 @@ function Countdown({ targetDate }: { targetDate: string }) {
 
   return (
     <div className={`text-center p-4 rounded-lg border-2 ${isPast ? 'border-green-400 bg-green-50' : 'border-orange-300 bg-orange-50'}`}>
-      <div className="text-xs text-muted-foreground mb-1">{isPast ? "Status naboru" : "Otwarcie naboru za"}</div>
+      <div className="text-xs text-muted-foreground mb-1">{label || (isPast ? "Status" : "Odliczanie")}</div>
       <div className={`text-2xl font-bold font-mono ${isPast ? 'text-green-700' : 'text-orange-700'}`}>{diff}</div>
     </div>
   );
@@ -96,6 +118,29 @@ export default function Simulation() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [prewarmStatus, setPrewarmStatus] = useState<"idle" | "warming" | "ok" | "error">("idle");
   const [prewarmMs, setPrewarmMs] = useState<number | null>(null);
+
+  const [fstSessions, setFstSessions] = useState<FstSessionInfo[]>([]);
+  const [fstPreloginRunning, setFstPreloginRunning] = useState(false);
+  const [fstSubmitRunning, setFstSubmitRunning] = useState(false);
+  const fstPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchFstSessions = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/automation/fst-sessions`);
+      const data = await res.json();
+      setFstSessions(data.sessions || []);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (portal === "fst") {
+      fetchFstSessions();
+      fstPollingRef.current = setInterval(fetchFstSessions, 3000);
+    }
+    return () => {
+      if (fstPollingRef.current) clearInterval(fstPollingRef.current);
+    };
+  }, [portal]);
 
   const runPrewarm = async () => {
     setPrewarmStatus("warming");
@@ -166,9 +211,53 @@ export default function Simulation() {
     }
   };
 
+  const runFstPrelogin = async () => {
+    setFstPreloginRunning(true);
+    try {
+      const res = await fetch(`${API_BASE}/automation/fst-prelogin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concurrency: 3 }),
+      });
+      const data = await res.json();
+      toast({ title: data.message });
+    } catch (err: any) {
+      toast({ title: "Blad", description: err.message, variant: "destructive" });
+    }
+    setTimeout(() => setFstPreloginRunning(false), 5000);
+  };
+
+  const runFstSubmit = async (autoSubmit: boolean) => {
+    setFstSubmitRunning(true);
+    try {
+      const res = await fetch(`${API_BASE}/automation/fst-submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concurrency: 3, autoSubmit }),
+      });
+      const data = await res.json();
+      toast({ title: data.message });
+    } catch (err: any) {
+      toast({ title: "Blad", description: err.message, variant: "destructive" });
+    }
+    setTimeout(() => setFstSubmitRunning(false), 5000);
+  };
+
+  const runFstCleanup = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/automation/fst-cleanup`, { method: "POST" });
+      const data = await res.json();
+      toast({ title: data.message });
+      setFstSessions([]);
+    } catch (err: any) {
+      toast({ title: "Blad", description: err.message, variant: "destructive" });
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
+      if (fstPollingRef.current) clearInterval(fstPollingRef.current);
     };
   }, []);
 
@@ -222,17 +311,9 @@ export default function Simulation() {
     </div>
   );
 
-  const portalInfo = portal === "ebon" ? {
-    name: NABOR_INFO.name,
-    url: NABOR_INFO.portal,
-    label: "EBON — projektebon.pl",
-    color: "blue",
-  } : {
-    name: "Mennica Uslug Szkoleniowych 3",
-    url: "https://fst-lodzkie.teradane.com",
-    label: "FST — fst-lodzkie.teradane.com",
-    color: "purple",
-  };
+  const readySessions = fstSessions.filter(s => s.status === "ready");
+  const errorSessions = fstSessions.filter(s => s.status === "error");
+  const activeSessions = fstSessions.filter(s => s.status === "logging_in" || s.status === "submitting");
 
   return (
     <div className="space-y-6">
@@ -268,67 +349,9 @@ export default function Simulation() {
                 FST (teradane.com)
               </Button>
             </div>
-            <div className="text-xs text-muted-foreground ml-auto">
-              {portalInfo.url}
-            </div>
           </div>
         </CardContent>
       </Card>
-
-      {portal === "ebon" && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 mb-2">
-                <Globe className="h-5 w-5 text-blue-600" />
-                <span className="font-semibold text-sm">Portal</span>
-              </div>
-              <div className="text-sm font-mono text-muted-foreground">{NABOR_INFO.portal}</div>
-              <div className="text-xs text-muted-foreground mt-1">{NABOR_INFO.name}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 mb-2">
-                <Clock className="h-5 w-5 text-orange-600" />
-                <span className="font-semibold text-sm">Otwarcie naboru</span>
-              </div>
-              <div className="text-sm">10.04.2026, godz. 16:00</div>
-              <div className="text-xs text-muted-foreground mt-1">Zamkniecie: 16.04.2026, godz. 17:00</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <Countdown targetDate={NABOR_INFO.openDate} />
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {portal === "fst" && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 mb-2">
-                <Globe className="h-5 w-5 text-purple-600" />
-                <span className="font-semibold text-sm">Portal FST</span>
-              </div>
-              <div className="text-sm font-mono text-muted-foreground">fst-lodzkie.teradane.com</div>
-              <div className="text-xs text-muted-foreground mt-1">Mennica Uslug Szkoleniowych 3</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-2 mb-2">
-                <Users className="h-5 w-5 text-purple-600" />
-                <span className="font-semibold text-sm">Uczestnicy</span>
-              </div>
-              <div className="text-sm">9 osob (6 wspolnych + 3 FST)</div>
-              <div className="text-xs text-muted-foreground mt-1">Karolina, Ania, Justyna, Aldona, Malgorzata, Sandra + Dominika, Dagmara, Ewelina</div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
 
       <Card className="border-yellow-200 bg-yellow-50/50">
         <CardContent className="pt-6">
@@ -338,7 +361,7 @@ export default function Simulation() {
                 <Zap className="h-4 w-4 text-yellow-600" /> Rozgrzewka serwera
               </div>
               <div className="text-xs text-muted-foreground">
-                Kliknij przed naborem, aby rozgrzac serwer i Chromium. Eliminuje opoznienie zimnego startu.
+                Kliknij przed naborem, aby rozgrzac serwer i Chromium.
                 {prewarmMs !== null && <span className="ml-2 font-medium">Czas: {prewarmMs}ms</span>}
               </div>
             </div>
@@ -360,77 +383,263 @@ export default function Simulation() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Monitor className="h-5 w-5" /> Uruchom automatyzacje
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-            <div className="border rounded-lg p-4 space-y-3">
-              <div className="font-medium text-sm flex items-center gap-2">
-                <Zap className="h-4 w-4 text-blue-600" /> Pojedynczy uczestnik
-              </div>
-              <Select value={selectedParticipantId} onValueChange={setSelectedParticipantId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Wybierz uczestnika..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {participants?.filter((p: any) => {
-                    const pp = p.portal || "ebon";
-                    return pp === portal || pp === "both";
-                  }).map((p: any) => (
-                    <SelectItem key={p.id} value={String(p.id)}>
-                      {p.imie} {p.nazwisko}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button onClick={runSingle} disabled={running || !selectedParticipantId} className="w-full">
-                {running && mode === "single" ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Trwa automatyzacja...</>
-                ) : (
-                  <><Play className="mr-2 h-4 w-4" /> Uruchom dla wybranego</>
-                )}
-              </Button>
-            </div>
-
-            <div className="border rounded-lg p-4 space-y-3">
-              <div className="font-medium text-sm flex items-center gap-2">
-                <Users className="h-4 w-4 text-green-600" /> Wszyscy uczestnicy
-              </div>
-              <div className="text-sm text-muted-foreground">
-                Uruchomi automatyzacje kolejno dla {participants?.filter((p: any) => { const pp = p.portal || "ebon"; return pp === portal || pp === "both"; }).length || 0} uczestnikow ({portal.toUpperCase()}).
-                Kazdy zostanie zalogowany, formularz wypelniony i wniosek wyslany automatycznie.
-              </div>
-              <Button onClick={runAll} disabled={running} variant="outline" className="w-full">
-                {running && mode === "all" ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Trwa automatyzacja...</>
-                ) : (
-                  <><Play className="mr-2 h-4 w-4" /> Uruchom dla wszystkich</>
-                )}
-              </Button>
-            </div>
+      {/* ========== EBON Portal ========== */}
+      {portal === "ebon" && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <Globe className="h-5 w-5 text-blue-600" />
+                  <span className="font-semibold text-sm">Portal</span>
+                </div>
+                <div className="text-sm font-mono text-muted-foreground">{NABOR_INFO.portal}</div>
+                <div className="text-xs text-muted-foreground mt-1">{NABOR_INFO.name}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <Clock className="h-5 w-5 text-orange-600" />
+                  <span className="font-semibold text-sm">Otwarcie naboru</span>
+                </div>
+                <div className="text-sm">10.04.2026, godz. 16:00</div>
+                <div className="text-xs text-muted-foreground mt-1">Zamkniecie: 16.04.2026, godz. 17:00</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <Countdown targetDate={NABOR_INFO.openDate} />
+              </CardContent>
+            </Card>
           </div>
 
-          <div className="border-t pt-3">
-            <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded p-3">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>
-                Automatyzacja wypelnia formularz i <strong>automatycznie wysyla wniosek</strong>.
-                Po zakonczeniu sprawdz zrzuty ekranu, aby potwierdzic wyslanie.
-              </span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Monitor className="h-5 w-5" /> Uruchom automatyzacje EBON
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                <div className="border rounded-lg p-4 space-y-3">
+                  <div className="font-medium text-sm flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-blue-600" /> Pojedynczy uczestnik
+                  </div>
+                  <Select value={selectedParticipantId} onValueChange={setSelectedParticipantId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Wybierz uczestnika..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {participants?.filter((p: any) => {
+                        const pp = p.portal || "ebon";
+                        return pp === "ebon" || pp === "both";
+                      }).map((p: any) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.imie} {p.nazwisko}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button onClick={runSingle} disabled={running || !selectedParticipantId} className="w-full">
+                    {running && mode === "single" ? (
+                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Trwa...</>
+                    ) : (
+                      <><Play className="mr-2 h-4 w-4" /> Uruchom</>
+                    )}
+                  </Button>
+                </div>
 
+                <div className="border rounded-lg p-4 space-y-3">
+                  <div className="font-medium text-sm flex items-center gap-2">
+                    <Users className="h-4 w-4 text-green-600" /> Wszyscy uczestnicy
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Uruchomi dla {participants?.filter((p: any) => { const pp = p.portal || "ebon"; return pp === "ebon" || pp === "both"; }).length || 0} uczestnikow EBON.
+                  </div>
+                  <Button onClick={runAll} disabled={running} variant="outline" className="w-full">
+                    {running && mode === "all" ? (
+                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Trwa...</>
+                    ) : (
+                      <><Play className="mr-2 h-4 w-4" /> Uruchom dla wszystkich</>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* ========== FST Portal — Two-Phase System ========== */}
+      {portal === "fst" && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <Globe className="h-5 w-5 text-purple-600" />
+                  <span className="font-semibold text-sm">Portal FST</span>
+                </div>
+                <div className="text-sm font-mono text-muted-foreground">{FST_NABOR.portal}</div>
+                <div className="text-xs text-muted-foreground mt-1">{FST_NABOR.name}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <Clock className="h-5 w-5 text-purple-600" />
+                  <span className="font-semibold text-sm">Skladanie wnioskow</span>
+                </div>
+                <div className="text-sm font-bold text-red-600">14.04.2026, godz. 9:00</div>
+                <div className="text-xs text-muted-foreground mt-1">Wnioski musza byc zlozone rownoczesnie</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <Countdown targetDate={FST_NABOR.submitDate} label="Do skladania wnioskow" />
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="border-purple-200">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <LogIn className="h-5 w-5 text-purple-600" /> FAZA 1: Pre-login (przed 9:00)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 text-sm">
+                <strong>Strategia:</strong> Wszyscy uczestnicy FST zostana zalogowani i przegladarki beda czekac
+                na stronie "Zloz wniosek". Kiedy nabor sie otworzy o 9:00, od razu mozna kliknac FAZA 2.
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  onClick={runFstPrelogin}
+                  disabled={fstPreloginRunning || fstSubmitRunning}
+                  className="bg-purple-600 hover:bg-purple-700"
+                >
+                  {fstPreloginRunning ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Logowanie...</>
+                  ) : (
+                    <><LogIn className="mr-2 h-4 w-4" /> Zaloguj wszystkich ({participants?.filter((p: any) => { const pp = p.portal || "ebon"; return pp === "fst" || pp === "both"; }).length || 0})</>
+                  )}
+                </Button>
+                <Button variant="outline" onClick={fetchFstSessions} size="sm">
+                  <RefreshCw className="mr-2 h-4 w-4" /> Odswierz status
+                </Button>
+                <Button variant="destructive" onClick={runFstCleanup} size="sm" disabled={fstSessions.length === 0}>
+                  <Trash2 className="mr-2 h-4 w-4" /> Zamknij przegladarki
+                </Button>
+              </div>
+
+              {fstSessions.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="font-medium">Sesje:</span>
+                    <span className="text-green-700">{readySessions.length} gotowych</span>
+                    {activeSessions.length > 0 && <span className="text-blue-700">{activeSessions.length} w trakcie</span>}
+                    {errorSessions.length > 0 && <span className="text-red-700">{errorSessions.length} bledow</span>}
+                  </div>
+                  <div className="grid gap-2">
+                    {fstSessions.map(s => (
+                      <div key={s.participantId} className="flex items-center justify-between border rounded px-3 py-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{s.imie} {s.nazwisko}</span>
+                          <span className="text-xs text-muted-foreground">{s.loginPortal}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={s.status} />
+                          {s.error && <span className="text-xs text-red-600">{s.error.substring(0, 50)}</span>}
+                          {s.readyAt && <span className="text-xs text-muted-foreground">{new Date(s.readyAt).toLocaleTimeString('pl-PL')}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-red-200">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Send className="h-5 w-5 text-red-600" /> FAZA 2: Zloz wnioski (o 9:00!)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm">
+                <strong>UWAGA:</strong> Kliknij dopiero gdy nabor sie otworzy! Wszystkie zalogowane przegladarki
+                jednoczesnie zaczna wypelniac i skladac wnioski. Gotowych sesji: <strong>{readySessions.length}</strong>.
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  onClick={() => runFstSubmit(true)}
+                  disabled={fstSubmitRunning || readySessions.length === 0}
+                  className="bg-red-600 hover:bg-red-700"
+                  size="lg"
+                >
+                  {fstSubmitRunning ? (
+                    <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Skladanie wnioskow...</>
+                  ) : (
+                    <><Send className="mr-2 h-5 w-5" /> ZLOZ WNIOSKI ({readySessions.length})</>
+                  )}
+                </Button>
+                <Button
+                  onClick={() => runFstSubmit(false)}
+                  disabled={fstSubmitRunning || readySessions.length === 0}
+                  variant="outline"
+                >
+                  <Play className="mr-2 h-4 w-4" /> Wypelnij bez wysylania (test)
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Monitor className="h-5 w-5" /> Pojedynczy test FST
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="border rounded-lg p-4 space-y-3">
+                <Select value={selectedParticipantId} onValueChange={setSelectedParticipantId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Wybierz uczestnika FST..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {participants?.filter((p: any) => {
+                      const pp = p.portal || "ebon";
+                      return pp === "fst" || pp === "both";
+                    }).map((p: any) => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.imie} {p.nazwisko}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button onClick={runSingle} disabled={running || !selectedParticipantId} className="w-full" variant="outline">
+                  {running && mode === "single" ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Trwa...</>
+                  ) : (
+                    <><Play className="mr-2 h-4 w-4" /> Test pojedynczego (pelny cykl)</>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* ========== Results ========== */}
       {running && mode === "single" && (
         <Card>
           <CardContent className="pt-6 flex items-center justify-center gap-3 py-12">
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
-            <span className="text-muted-foreground">Przegladarka pracuje — logowanie i wypelnianie formularza...</span>
+            <span className="text-muted-foreground">Przegladarka pracuje...</span>
           </CardContent>
         </Card>
       )}

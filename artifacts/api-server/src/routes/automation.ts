@@ -1,7 +1,11 @@
 import { Router, type IRouter } from "express";
 import { db, participantsTable, operationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { runAutomationForParticipant, runAutomationForAll, runFstAutomationForParticipant, type AutomationResult, type StepLog, type PortalType } from "../automation/browser";
+import {
+  runAutomationForParticipant, runAutomationForAll, runFstAutomationForParticipant,
+  fstPreloginAll, fstSubmitAll, fstCleanupAll, getFstSessionsStatus,
+  type AutomationResult, type StepLog, type PortalType
+} from "../automation/browser";
 import puppeteer from "puppeteer-core";
 import { existsSync } from "fs";
 
@@ -194,6 +198,100 @@ router.post("/automation/run-single-sync/:id", async (req, res): Promise<void> =
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ========== FST TWO-PHASE: Pre-login + Submit ==========
+
+router.get("/automation/fst-sessions", async (_req, res): Promise<void> => {
+  res.json({ sessions: getFstSessionsStatus() });
+});
+
+router.post("/automation/fst-prelogin", async (req, res): Promise<void> => {
+  const concurrency = req.body?.concurrency || 3;
+  const allParticipants = await db.select().from(participantsTable).orderBy(participantsTable.id);
+  const fstParticipants = allParticipants.filter(p => {
+    const pp = (p as any).portal || "ebon";
+    return pp === "fst" || pp === "both";
+  });
+
+  if (fstParticipants.length === 0) {
+    res.json({ message: "Brak uczestnikow FST", total: 0 });
+    return;
+  }
+
+  res.json({ message: `Pre-login FST uruchomiony dla ${fstParticipants.length} uczestnikow`, total: fstParticipants.length });
+
+  (async () => {
+    try {
+      const results = await fstPreloginAll(fstParticipants as any[], undefined, concurrency);
+      const okCount = results.filter(r => r.success).length;
+      const errCount = results.filter(r => !r.success).length;
+
+      await db.insert(operationsTable).values({
+        operationType: "fst_prelogin",
+        status: errCount > 0 ? "errors" : "ok",
+        summary: `FST Pre-login: ${okCount} zalogowanych, ${errCount} bledow z ${fstParticipants.length} uczestnikow`,
+        resultData: JSON.stringify(results),
+      });
+    } catch (err: any) {
+      await db.insert(operationsTable).values({
+        operationType: "fst_prelogin",
+        status: "errors",
+        summary: `FST Pre-login blad: ${err.message}`,
+      });
+    }
+  })();
+});
+
+router.post("/automation/fst-submit", async (req, res): Promise<void> => {
+  const concurrency = req.body?.concurrency || 3;
+  const autoSubmit = req.body?.autoSubmit !== false;
+  const allParticipants = await db.select().from(participantsTable).orderBy(participantsTable.id);
+  const fstParticipants = allParticipants.filter(p => {
+    const pp = (p as any).portal || "ebon";
+    return pp === "fst" || pp === "both";
+  });
+
+  if (fstParticipants.length === 0) {
+    res.json({ message: "Brak uczestnikow FST", total: 0 });
+    return;
+  }
+
+  const sessions = getFstSessionsStatus();
+  const readySessions = sessions.filter(s => s.status === "ready");
+
+  res.json({
+    message: `FST Submit uruchomiony. Gotowych sesji: ${readySessions.length}/${fstParticipants.length}`,
+    total: fstParticipants.length,
+    readyCount: readySessions.length,
+    autoSubmit,
+  });
+
+  (async () => {
+    try {
+      const results = await fstSubmitAll(fstParticipants as any[], undefined, concurrency, autoSubmit);
+      const okCount = results.filter(r => r.status !== "error").length;
+      const errCount = results.filter(r => r.status === "error").length;
+
+      await db.insert(operationsTable).values({
+        operationType: "fst_submit",
+        status: errCount > 0 ? "errors" : "ok",
+        summary: `FST Submit: ${okCount} OK, ${errCount} bledow z ${fstParticipants.length} uczestnikow`,
+        resultData: JSON.stringify(results),
+      });
+    } catch (err: any) {
+      await db.insert(operationsTable).values({
+        operationType: "fst_submit",
+        status: "errors",
+        summary: `FST Submit blad: ${err.message}`,
+      });
+    }
+  })();
+});
+
+router.post("/automation/fst-cleanup", async (_req, res): Promise<void> => {
+  const result = await fstCleanupAll();
+  res.json({ message: `Zamknieto ${result.closed} przegladarek`, ...result });
 });
 
 router.post("/automation/explore-fst", async (req, res): Promise<void> => {
