@@ -1618,6 +1618,27 @@ export interface FstSession {
 let fstSharedBrowser: Browser | null = null;
 const fstSessions: Map<number, FstSession> = new Map();
 
+interface FstSubmitJob {
+  status: "running" | "completed" | "error";
+  startedAt: string;
+  finishedAt?: string;
+  totalParticipants: number;
+  completedCount: number;
+  results: AutomationResult[];
+  progress: Record<number, StepLog[]>;
+  autoSubmit: boolean;
+}
+
+let fstSubmitJob: FstSubmitJob | null = null;
+
+export function getFstSubmitJobStatus(): FstSubmitJob | null {
+  return fstSubmitJob;
+}
+
+export function setFstSubmitJob(job: FstSubmitJob | null) {
+  fstSubmitJob = job;
+}
+
 export function getFstSessions(): Map<number, FstSession> {
   return fstSessions;
 }

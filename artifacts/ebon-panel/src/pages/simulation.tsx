@@ -124,7 +124,9 @@ export default function Simulation() {
   const [fstSessions, setFstSessions] = useState<FstSessionInfo[]>([]);
   const [fstPreloginRunning, setFstPreloginRunning] = useState(false);
   const [fstSubmitRunning, setFstSubmitRunning] = useState(false);
+  const [fstSubmitJob, setFstSubmitJob] = useState<any>(null);
   const fstPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fstSubmitPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [dryRunning, setDryRunning] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<AutomationResult | null>(null);
 
@@ -233,6 +235,7 @@ export default function Simulation() {
 
   const runFstSubmit = async (autoSubmit: boolean) => {
     setFstSubmitRunning(true);
+    setFstSubmitJob(null);
     try {
       const res = await fetch(`${API_BASE}/automation/fst-submit`, {
         method: "POST",
@@ -241,10 +244,37 @@ export default function Simulation() {
       });
       const data = await res.json();
       toast({ title: data.message });
+
+      if (fstSubmitPollingRef.current) clearInterval(fstSubmitPollingRef.current);
+      fstSubmitPollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${API_BASE}/automation/fst-submit-status`);
+          const statusData = await statusRes.json();
+          if (statusData.status !== "idle") {
+            setFstSubmitJob(statusData);
+          }
+          if (statusData.status === "completed" || statusData.status === "error") {
+            if (fstSubmitPollingRef.current) clearInterval(fstSubmitPollingRef.current);
+            setFstSubmitRunning(false);
+            toast({ title: `Submit zakonczony: ${statusData.status}` });
+            fetchFstSessions();
+
+            if (statusData.results) {
+              const next: Record<string, boolean> = {};
+              statusData.results.forEach((r: any) => {
+                (r.steps || []).forEach((_: any, i: number) => {
+                  next[`submit-${r.participantId}-${i}`] = true;
+                });
+              });
+              setExpandedScreenshots(prev => ({ ...prev, ...next }));
+            }
+          }
+        } catch {}
+      }, 3000);
     } catch (err: any) {
       toast({ title: "Blad", description: err.message, variant: "destructive" });
+      setFstSubmitRunning(false);
     }
-    setTimeout(() => setFstSubmitRunning(false), 5000);
   };
 
   const runFstDryRun = async () => {
@@ -641,6 +671,72 @@ export default function Simulation() {
               </div>
             </CardContent>
           </Card>
+
+          {fstSubmitJob && (
+            <Card className="border-purple-200">
+              <CardHeader className="pb-3 border-b bg-purple-50/30">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Send className="h-5 w-5 text-purple-600" />
+                    Wyniki {fstSubmitJob.autoSubmit ? "skladania wnioskow" : "testu (bez wysylania)"}
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    {fstSubmitJob.status === "running" && <Loader2 className="h-4 w-4 animate-spin" />}
+                    <StatusBadge status={fstSubmitJob.status} />
+                  </div>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Start: {new Date(fstSubmitJob.startedAt).toLocaleString('pl-PL')}
+                  {fstSubmitJob.finishedAt && ` | Koniec: ${new Date(fstSubmitJob.finishedAt).toLocaleString('pl-PL')}`}
+                  {` | Uczestnikow: ${fstSubmitJob.completedCount}/${fstSubmitJob.totalParticipants}`}
+                </div>
+              </CardHeader>
+              <CardContent className="pt-4 space-y-4">
+                {fstSubmitJob.results?.map((r: AutomationResult) => (
+                  <div key={r.participantId} className="border rounded-lg overflow-hidden">
+                    <div className="bg-muted/20 px-4 py-2 flex items-center justify-between border-b">
+                      <span className="font-medium text-sm">{r.imie} {r.nazwisko}</span>
+                      <StatusBadge status={r.status} />
+                    </div>
+                    <div className="p-4 space-y-3">
+                      {r.errorSummary && (
+                        <div className={`rounded-lg p-3 text-sm font-medium ${r.status === "waiting" ? "bg-amber-50 text-amber-900 border border-amber-200" : "bg-red-50 text-red-900 border border-red-200"}`}>
+                          {r.status === "waiting" ? <Clock className="h-4 w-4 inline mr-2" /> : <XCircle className="h-4 w-4 inline mr-2" />}
+                          {r.errorSummary}
+                        </div>
+                      )}
+                      {r.status === "error" && !r.errorSummary && (
+                        <div className="rounded-lg p-3 text-sm font-medium bg-red-50 text-red-900 border border-red-200">
+                          <XCircle className="h-4 w-4 inline mr-2" />
+                          {r.steps.filter(s => s.status === "error").pop()?.message || "Wystapil nieznany blad"}
+                        </div>
+                      )}
+                      {renderSteps(r.steps, `submit-${r.participantId}`)}
+                    </div>
+                  </div>
+                ))}
+
+                {fstSubmitJob.status === "running" && Object.entries(fstSubmitJob.progress || {}).map(([pid, steps]) => (
+                  <div key={pid} className="border rounded-lg overflow-hidden border-blue-200">
+                    <div className="bg-blue-50/30 px-4 py-2 flex items-center gap-2 border-b">
+                      <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
+                      <span className="text-sm font-medium">Uczestnik #{pid} — w trakcie...</span>
+                    </div>
+                    <div className="p-4">
+                      {renderSteps(steps as StepLog[], `progress-submit-${pid}`)}
+                    </div>
+                  </div>
+                ))}
+
+                {fstSubmitJob.status === "running" && Object.keys(fstSubmitJob.progress || {}).length === 0 && (
+                  <div className="flex items-center justify-center gap-3 py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-purple-600" />
+                    <span className="text-muted-foreground">Rozpoczynam skladanie wnioskow...</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="border-green-200">
             <CardHeader>

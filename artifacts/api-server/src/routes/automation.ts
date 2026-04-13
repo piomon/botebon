@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import {
   runAutomationForParticipant, runAutomationForAll, runFstAutomationForParticipant,
   fstPreloginAll, fstSubmitAll, fstCleanupAll, getFstSessionsStatus, fstDryRunSingle,
+  getFstSubmitJobStatus, setFstSubmitJob,
   type AutomationResult, type StepLog, type PortalType
 } from "../automation/browser";
 import { chromium } from "playwright-core";
@@ -260,6 +261,17 @@ router.post("/automation/fst-submit", async (req, res): Promise<void> => {
   const sessions = getFstSessionsStatus();
   const readySessions = sessions.filter(s => s.status === "ready");
 
+  const job = {
+    status: "running" as const,
+    startedAt: new Date().toISOString(),
+    totalParticipants: fstParticipants.length,
+    completedCount: 0,
+    results: [] as AutomationResult[],
+    progress: {} as Record<number, any[]>,
+    autoSubmit,
+  };
+  setFstSubmitJob(job);
+
   res.json({
     message: `FST Submit uruchomiony. Gotowych sesji: ${readySessions.length}/${fstParticipants.length}`,
     total: fstParticipants.length,
@@ -269,7 +281,17 @@ router.post("/automation/fst-submit", async (req, res): Promise<void> => {
 
   (async () => {
     try {
-      const results = await fstSubmitAll(fstParticipants as any[], undefined, concurrency, autoSubmit);
+      const onProgress = (participantId: number, step: any) => {
+        if (!job.progress[participantId]) job.progress[participantId] = [];
+        job.progress[participantId].push(step);
+      };
+      const results = await fstSubmitAll(fstParticipants as any[], onProgress, concurrency, autoSubmit);
+      job.results = results;
+      job.completedCount = results.length;
+      job.status = "completed";
+      job.finishedAt = new Date().toISOString();
+      setFstSubmitJob(job);
+
       const okCount = results.filter(r => r.status !== "error").length;
       const errCount = results.filter(r => r.status === "error").length;
 
@@ -280,6 +302,9 @@ router.post("/automation/fst-submit", async (req, res): Promise<void> => {
         resultData: JSON.stringify(results),
       });
     } catch (err: any) {
+      job.status = "error";
+      job.finishedAt = new Date().toISOString();
+      setFstSubmitJob(job);
       await db.insert(operationsTable).values({
         operationType: "fst_submit",
         status: "errors",
@@ -287,6 +312,15 @@ router.post("/automation/fst-submit", async (req, res): Promise<void> => {
       });
     }
   })();
+});
+
+router.get("/automation/fst-submit-status", async (_req, res): Promise<void> => {
+  const job = getFstSubmitJobStatus();
+  if (!job) {
+    res.json({ status: "idle", message: "Brak aktywnego submitu" });
+    return;
+  }
+  res.json(job);
 });
 
 router.post("/automation/fst-cleanup", async (_req, res): Promise<void> => {
