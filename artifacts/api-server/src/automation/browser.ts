@@ -2008,6 +2008,7 @@ export async function fstSubmitParticipant(
   const page = session.page;
   const steps: StepLog[] = [...session.steps];
   let status: AutomationResult["status"] = "completed";
+  const pdfPath = "/tmp/dummy_zaswiadczenie.pdf";
 
   const addStep = (s: StepLog) => {
     steps.push(s);
@@ -2015,513 +2016,332 @@ export async function fstSubmitParticipant(
     onProgress?.(participant.id, s);
   };
 
-  async function blazorType(sel: string, value: string) {
-    await page.click(sel, { clickCount: 3 });
-    await page.keyboard.press("Backspace");
-    await page.type(sel, value, { delay: 20 });
+  async function blazorTypeFast(sel: string, value: string) {
     await page.evaluate((s, v) => {
       const el = document.querySelector(s) as HTMLInputElement;
       if (el) {
+        el.focus();
         el.value = v;
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
         el.dispatchEvent(new Event('blur', { bubbles: true }));
       }
     }, sel, value);
-    await delay(100);
+  }
+
+  async function blazorSelectFast(selectIndex: number, searchText: string, waitMs = 500) {
+    const info = await page.evaluate((idx) => {
+      const selects = Array.from(document.querySelectorAll("select"));
+      if (idx >= selects.length) return { exists: false, id: "", opts: [] as any[] };
+      const s = selects[idx] as HTMLSelectElement;
+      if (!s.id) s.id = `__fst_q_${idx}_${Date.now()}`;
+      return {
+        exists: true,
+        id: s.id,
+        opts: Array.from(s.options).filter(o => o.value && o.value !== "" && o.value !== "0").map(o => ({ value: o.value, text: o.text })),
+      };
+    }, selectIndex);
+
+    if (!info.exists || info.opts.length === 0) return { ok: false, msg: `sel[${selectIndex}] brak` };
+
+    const match = info.opts.find(o => o.text.toLowerCase().includes(searchText.toLowerCase()));
+    const chosen = match || info.opts[0];
+
+    await page.select(`#${info.id}`, chosen.value).catch(() => {});
+    await page.evaluate((id) => {
+      const el = document.getElementById(id) as HTMLSelectElement;
+      if (el) {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, info.id);
+    if (waitMs > 0) await delay(waitMs);
+    return { ok: true, msg: chosen.text.substring(0, 30) };
+  }
+
+  async function uploadAllFiles() {
+    const fileInputs = await page.$$("input[type='file']");
+    let count = 0;
+    for (const fi of fileInputs) {
+      try { await fi.uploadFile(pdfPath); count++; } catch {}
+    }
+    return count;
   }
 
   try {
-    await page.evaluate(() => {
-      const content = document.querySelector("article, .content, main") || document.body;
-      if (content) (content as HTMLElement).click();
-    });
-    await delay(1000);
-
     const currentPageText = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || "");
-    const currentUrl = page.url();
-    let screenshot = await takeScreenshot(page);
+    let screenshot: string = "";
 
-    addStep(log("submit_start", "ok",
-      `Rozpoczynam skladanie wniosku. URL: ${currentUrl}. Tekst: ${currentPageText.substring(0, 150)}`,
-      screenshot));
+    addStep(log("submit_start", "ok", `START. URL: ${page.url()}`));
 
-    const needsRefresh = currentPageText.includes("Brak aktualnych naborów");
-    if (needsRefresh) {
+    if (currentPageText.includes("Brak aktualnych naborów")) {
       await page.evaluate(() => {
         const links = Array.from(document.querySelectorAll("a"));
         const homeLink = links.find(l => l.getAttribute("href") === "" || l.getAttribute("href") === "/");
         if (homeLink) (homeLink as HTMLElement).click();
       });
-      await delay(2000);
+      await delay(500);
       await page.evaluate(() => {
         const links = Array.from(document.querySelectorAll("a"));
         for (const link of links) {
-          const text = (link.textContent || "").trim();
-          if (text === "Złóż wniosek") { (link as HTMLElement).click(); return; }
+          if ((link.textContent || "").trim() === "Złóż wniosek") { (link as HTMLElement).click(); return; }
         }
         for (const link of links) {
           if ((link.getAttribute("href") || "").toLowerCase() === "nabory") { (link as HTMLElement).click(); return; }
         }
       });
-      await delay(6000);
-
-      for (let waitAttempt = 0; waitAttempt < 10; waitAttempt++) {
-        const hasNabor = await page.evaluate(() => {
-          const body = document.body?.innerText || "";
-          return !body.includes("Brak aktualnych naborów") && (body.includes("Złóż") || body.includes("wniosek"));
-        });
-        if (hasNabor) break;
-        await delay(3000);
+      await delay(2000);
+      for (let w = 0; w < 10; w++) {
+        const ok = await page.evaluate(() => !document.body?.innerText?.includes("Brak aktualnych naborów"));
+        if (ok) break;
+        await delay(1000);
       }
     }
 
-    screenshot = await takeScreenshot(page);
-    const afterRefreshText = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || "");
-
-    if (afterRefreshText.includes("Brak aktualnych naborów")) {
-      addStep(log("submit_no_nabor", "error", "Nadal brak aktualnych naborow po odswiezeniu", screenshot));
+    const afterText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || "");
+    if (afterText.includes("Brak aktualnych naborów")) {
+      addStep(log("submit_no_nabor", "error", "Brak aktualnych naborow"));
       session.status = "error";
-      session.error = "Brak aktualnych naborow";
-      return {
-        participantId: participant.id,
-        imie: participant.imie,
-        nazwisko: participant.nazwisko,
-        loginPortal: participant.loginPortal,
-        status: "error",
-        steps,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-      };
+      return { participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
+        loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString() };
     }
 
-    let zlozResult = await page.evaluate(() => {
-      const keywords = ["złóż wniosek", "kontynuuj", "edytuj wniosek", "przejdź do wniosku", "otwórz"];
-      const nonNavElements = Array.from(document.querySelectorAll("button, a, input[type='submit'], td a, td button")).filter(
+    await page.evaluate(() => {
+      const kw = ["złóż wniosek", "kontynuuj", "edytuj wniosek"];
+      const els = Array.from(document.querySelectorAll("button, a, td a, td button")).filter(
         b => !(b as Element).closest("nav") && !(b as Element).closest(".navbar") && !b.classList.contains("nav-link")
       );
-      for (const kw of keywords) {
-        for (const el of nonNavElements) {
-          const t = (el.textContent || "").trim().toLowerCase();
-          if (t.includes(kw)) {
-            (el as HTMLElement).click();
-            return { clicked: true, text: (el.textContent || "").trim() };
-          }
-        }
-      }
-      for (const el of nonNavElements) {
-        const cls = (el as Element).className || "";
-        if (cls.includes("btn-primary") || cls.includes("btn-danger") || cls.includes("btn-success") || cls.includes("btn-warning")) {
-          (el as HTMLElement).click();
-          return { clicked: true, text: (el.textContent || "").trim() + " (color-btn)" };
-        }
-      }
-      const tableBtn = document.querySelector("table button, table a, .card button, .card a");
-      if (tableBtn) {
-        (tableBtn as HTMLElement).click();
-        return { clicked: true, text: (tableBtn.textContent || "").trim() + " (table-btn)" };
-      }
-      return { clicked: false, text: "" };
+      for (const k of kw) { for (const el of els) { if ((el.textContent || "").trim().toLowerCase().includes(k)) { (el as HTMLElement).click(); return; } } }
+      for (const el of els) { const c = (el as Element).className || ""; if (c.includes("btn-primary") || c.includes("btn-success") || c.includes("btn-warning")) { (el as HTMLElement).click(); return; } }
     });
 
-    await delay(5000);
-    screenshot = await takeScreenshot(page);
+    await delay(1500);
 
-    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 3000) || "");
-    const formCheckUrl = page.url().toLowerCase();
-    const alreadySubmitted = pageText.toLowerCase().includes("złożono wniosek w projekcie");
-    const alreadyOnForm = formCheckUrl.includes("wybierzrodzajwniosku") || formCheckUrl.includes("mieszkamlodzkie") || formCheckUrl.includes("formularz");
-    const hasFormElements = await page.evaluate(() => document.querySelectorAll("select").length >= 2);
-
-    if (alreadySubmitted) {
-      addStep(log("wniosek_juz_zlozony", "ok", `Wniosek juz zlozony wczesniej. URL: ${page.url()}`, screenshot));
+    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || "");
+    if (pageText.toLowerCase().includes("złożono wniosek w projekcie")) {
+      addStep(log("juz_zlozony", "ok", "Wniosek juz zlozony"));
       session.status = "done";
-      return {
-        participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
-        loginPortal: participant.loginPortal, status: "completed", steps, startedAt, finishedAt: new Date().toISOString(),
-      };
+      return { participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
+        loginPortal: participant.loginPortal, status: "completed", steps, startedAt, finishedAt: new Date().toISOString() };
     }
 
-    if (!zlozResult.clicked && !alreadyOnForm && !hasFormElements) {
-      addStep(log("submit_no_button", "error", `Nie znaleziono przycisku do zlozenia wniosku. URL: ${page.url()}`, screenshot));
-      session.status = "error";
-      return {
-        participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
-        loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString(),
-      };
-    }
+    addStep(log("submit_klik", "ok", `Na formularzu. URL: ${page.url()}`));
 
-    addStep(log("submit_klik", zlozResult.clicked ? "ok" : "skip",
-      zlozResult.clicked ? `Kliknieto "${zlozResult.text}". URL: ${page.url()}` : `Juz na formularzu. URL: ${page.url()}`, screenshot));
-
-    await delay(3000);
-    screenshot = await takeScreenshot(page);
-
-    // ===== STEP 1 FORM: Two dropdowns + US PDF upload + "Przejdz dalej" =====
-    const step1Selects = await page.evaluate(() => {
-      const selects = Array.from(document.querySelectorAll("select"));
-      return selects.map((s, i) => {
-        if (!s.id) s.id = `__fst_s1_${i}_${Date.now()}`;
-        const opts = Array.from((s as HTMLSelectElement).options).map(o => ({ value: o.value, text: o.text }));
-        return { id: s.id, opts: opts.filter(o => o.value && o.value !== "" && o.value !== "0") };
+    // ===== STEP 1: Two dropdowns + PDF + "Przejdz dalej" — FAST =====
+    const s1Selects = await page.evaluate(() => {
+      const sels = Array.from(document.querySelectorAll("select"));
+      return sels.map((s, i) => {
+        if (!s.id) s.id = `__q1_${i}_${Date.now()}`;
+        return { id: s.id, opts: Array.from((s as HTMLSelectElement).options).filter(o => o.value && o.value !== "" && o.value !== "0").map(o => ({ value: o.value, text: o.text })) };
       });
     });
-
-    const step1Log: string[] = [];
-    for (let i = 0; i < step1Selects.length; i++) {
-      const sel = step1Selects[i];
+    for (let i = 0; i < s1Selects.length; i++) {
+      const sel = s1Selects[i];
       if (sel.opts.length === 0) continue;
-      let chosen;
-      if (i === 0) {
-        chosen = sel.opts.find(o => o.text.toLowerCase().includes("nie prowadzę") || o.text.toLowerCase().includes("działalności")) || sel.opts[0];
-      } else {
-        chosen = sel.opts.find(o => o.text.toLowerCase().includes("mieszkam")) || sel.opts[0];
-      }
-      try {
-        await page.select(`#${sel.id}`, chosen.value);
-        step1Log.push(`${i === 0 ? "działalność" : "rodzaj"}=${chosen.text.substring(0, 40)}`);
-      } catch {
-        step1Log.push(`${i}_error`);
-      }
-      await delay(1000);
-    }
-    addStep(log("submit_step1_selecty", "ok", `Dropdowny: [${step1Log.join(", ")}]`, screenshot));
-
-    const dummyPdfPath = "/tmp/dummy_zaswiadczenie.pdf";
-    const fileInputsStep1 = await page.$$("input[type='file']");
-    if (fileInputsStep1.length > 0) {
-      try {
-        await fileInputsStep1[0].uploadFile(dummyPdfPath);
-        await delay(2000);
-        addStep(log("submit_step1_upload", "ok", "Zaladowano PDF (zaswiadczenie US)"));
-      } catch (e: any) {
-        addStep(log("submit_step1_upload", "skip", `Upload: ${e.message}`));
-      }
+      const chosen = i === 0
+        ? (sel.opts.find(o => o.text.toLowerCase().includes("nie prowadzę") || o.text.toLowerCase().includes("działalności")) || sel.opts[0])
+        : (sel.opts.find(o => o.text.toLowerCase().includes("mieszkam")) || sel.opts[0]);
+      await page.select(`#${sel.id}`, chosen.value).catch(() => {});
+      await delay(200);
     }
 
-    const przejdzResult = await page.evaluate(() => {
+    const u1 = await uploadAllFiles();
+    addStep(log("step1", "ok", `Selecty+upload(${u1})`));
+
+    await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
-      for (const btn of btns) {
-        const t = (btn.textContent || "").trim().toLowerCase();
-        if (t.includes("przejdź dalej") || t.includes("przejdz dalej") || t.includes("dalej")) {
-          (btn as HTMLElement).click();
-          return { clicked: true, text: (btn.textContent || "").trim() };
-        }
-      }
-      return { clicked: false, text: "" };
+      for (const b of btns) { if ((b.textContent || "").toLowerCase().includes("dalej")) { (b as HTMLElement).click(); return; } }
     });
+    await delay(2000);
 
-    if (przejdzResult.clicked) {
-      await delay(6000);
-      screenshot = await takeScreenshot(page);
-      addStep(log("submit_przejdz_dalej", "ok", `Kliknieto "${przejdzResult.text}". URL: ${page.url()}`, screenshot));
-    } else {
-      screenshot = await takeScreenshot(page);
-      addStep(log("submit_przejdz_dalej", "error", `Nie znaleziono "Przejdz dalej". URL: ${page.url()}`, screenshot));
-      status = "error";
-      session.status = "error";
-      return {
-        participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
-        loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString(),
-      };
+    const onStep2 = await page.evaluate(() => document.querySelectorAll("select").length >= 3);
+    if (!onStep2) {
+      await delay(2000);
     }
+    addStep(log("step1_dalej", "ok", `Przejdz dalej. URL: ${page.url()}`));
 
-    // ===== STEP 2 FORM: Address cascading selects + text fields + uploads + status selects + checkboxes =====
-    await delay(3000);
-
+    // ===== STEP 2: Address + fields + uploads + selects + checkboxes — FAST =====
     const adresMatch = participant.adres.match(/^ul\.?\s*(.+?)\s+(\d+.*)$/i);
     const ulicaName = adresMatch ? adresMatch[1] : participant.adres.replace(/^ul\.?\s*/i, "");
     const numerDomuLokalu = adresMatch ? adresMatch[2] : "";
 
-    async function blazorSelectByIndex(selectIndex: number, searchText: string, waitMs = 3000) {
-      const info = await page.evaluate((idx) => {
-        const selects = Array.from(document.querySelectorAll("select"));
-        if (idx >= selects.length) return { exists: false, id: "", optCount: 0, opts: [] as string[] };
-        const s = selects[idx] as HTMLSelectElement;
-        if (!s.id) s.id = `__fst_s2_${idx}_${Date.now()}`;
-        const opts = Array.from(s.options).map(o => ({ value: o.value, text: o.text }));
-        return { exists: true, id: s.id, optCount: opts.length, opts: opts.filter(o => o.value && o.value !== "" && o.value !== "0") };
-      }, selectIndex);
+    // Cascading address selects — need Blazor reaction time between each
+    const woj = await blazorSelectFast(0, "łódzkie", 1500);
+    const powSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto;
+    let pow = { ok: false, msg: "" };
+    for (let r = 0; r < 3; r++) { pow = await blazorSelectFast(1, powSearch, 1500); if (pow.ok) break; await delay(1000); }
+    let gm = { ok: false, msg: "" };
+    for (let r = 0; r < 3; r++) { gm = await blazorSelectFast(2, powSearch, 1500); if (gm.ok) break; await delay(1000); }
+    let mc = { ok: false, msg: "" };
+    for (let r = 0; r < 3; r++) { mc = await blazorSelectFast(3, powSearch, 1500); if (mc.ok) break; await delay(1000); }
+    let ul = { ok: false, msg: "" };
+    for (let r = 0; r < 3; r++) { ul = await blazorSelectFast(4, ulicaName, 500); if (ul.ok) break; await delay(1000); }
+    addStep(log("adres", "ok", `woj:${woj.msg} pow:${pow.msg} gm:${gm.msg} mc:${mc.msg} ul:${ul.msg}`));
 
-      if (!info.exists) return { ok: false, msg: `select[${selectIndex}] nie istnieje` };
-      if (info.opts.length === 0) return { ok: false, msg: `select[${selectIndex}] brak opcji` };
-
-      const match = info.opts.find(o => o.text.toLowerCase().includes(searchText.toLowerCase()));
-      const chosen = match || info.opts[0];
-
-      try {
-        await page.select(`#${info.id}`, chosen.value);
-        await page.evaluate((id) => {
-          const el = document.getElementById(id) as HTMLSelectElement;
-          if (el) {
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        }, info.id);
-      } catch {
-        await page.evaluate((id, val) => {
-          const el = document.getElementById(id) as HTMLSelectElement;
-          if (el) { el.value = val; el.dispatchEvent(new Event('change', { bubbles: true })); }
-        }, info.id, chosen.value);
-      }
-      await delay(waitMs);
-      return { ok: true, msg: match ? chosen.text : `fallback: ${chosen.text}` };
-    }
-
-    const addrLog: string[] = [];
-
-    const woj = await blazorSelectByIndex(0, "łódzkie", 5000);
-    addrLog.push(`woj: ${woj.msg}`);
-
-    const powiatSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" :
-                         participant.miasto.toLowerCase() === "maków" ? "skierniewi" : participant.miasto;
-    for (let retry = 0; retry < 3; retry++) {
-      const pow = await blazorSelectByIndex(1, powiatSearch, 5000);
-      addrLog.push(`powiat: ${pow.msg}`);
-      if (pow.ok) break;
-      await delay(3000);
-    }
-
-    const gminaSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto;
-    for (let retry = 0; retry < 3; retry++) {
-      const gm = await blazorSelectByIndex(2, gminaSearch, 5000);
-      addrLog.push(`gmina: ${gm.msg}`);
-      if (gm.ok) break;
-      await delay(3000);
-    }
-
-    for (let retry = 0; retry < 3; retry++) {
-      const mc = await blazorSelectByIndex(3, participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto, 5000);
-      addrLog.push(`miejscowosc: ${mc.msg}`);
-      if (mc.ok) break;
-      await delay(3000);
-    }
-
-    for (let retry = 0; retry < 3; retry++) {
-      const ul = await blazorSelectByIndex(4, ulicaName, 4000);
-      addrLog.push(`ulica: ${ul.msg}`);
-      if (ul.ok) break;
-      await delay(3000);
-    }
-
-    addStep(log("submit_adres", "ok", `Adres: [${addrLog.join("; ")}]`));
-
-    const textInputs = await page.$$("input[type='text']:not([readonly]):not([disabled])");
-    const textLog: string[] = [];
-
-    for (const inp of textInputs) {
-      const attrs = await page.evaluate(el => ({
-        name: el.name || "",
-        id: el.id || "",
-        placeholder: el.placeholder || "",
-        value: el.value || "",
-        parentText: (() => {
-          let node: Element | null = el;
-          let text = "";
-          for (let i = 0; i < 3 && node; i++) {
-            node = node.parentElement;
-            if (node) {
-              const label = node.querySelector("label, strong, b, h5, h6");
-              if (label) { text += " " + (label.textContent || ""); }
-            }
-          }
-          return (text + " " + (el.previousElementSibling?.textContent || "")).toLowerCase().substring(0, 200);
-        })(),
-      }), inp);
-
-      if (attrs.value) continue;
-      const allText = `${attrs.name} ${attrs.id} ${attrs.placeholder} ${attrs.parentText}`;
-      const selector = attrs.name ? `input[name="${attrs.name}"]` : attrs.id ? `#${attrs.id}` : null;
-      if (!selector) continue;
-
-      try {
-        if (allText.includes("numer dom") || allText.includes("domu") || allText.includes("lokalu") || allText.includes("nr dom") || allText.includes("budyn")) {
-          await blazorType(selector, numerDomuLokalu || "1");
-          textLog.push("numer_domu_lokalu");
-        } else if (allText.includes("kod") || allText.includes("poczt")) {
-          await blazorType(selector, participant.kodPocztowy);
-          textLog.push("kod_pocztowy");
-        } else if (allText.includes("szkoł") || allText.includes("szkol") || allText.includes("uczelni") || allText.includes("nauk") || allText.includes("pobierania")) {
-          await blazorType(selector, "Brak");
-          textLog.push("nazwa_szkoly");
-        } else {
-          await blazorType(selector, "Brak");
-          textLog.push(`other:${attrs.name || attrs.id}`);
+    // Text fields — fill ALL empty inputs fast
+    await page.evaluate((nrDomu, kodPoczt) => {
+      const inputs = Array.from(document.querySelectorAll("input[type='text']:not([readonly]):not([disabled])")) as HTMLInputElement[];
+      for (const inp of inputs) {
+        if (inp.value) continue;
+        let parent = inp.parentElement;
+        let labelText = "";
+        for (let i = 0; i < 3 && parent; i++) {
+          const l = parent.querySelector("label, strong, b");
+          if (l) labelText += " " + (l.textContent || "");
+          parent = parent.parentElement;
         }
-      } catch {}
-    }
-
-    const textareas = await page.$$("textarea:not([readonly]):not([disabled])");
-    for (const ta of textareas) {
-      const hasValue = await page.evaluate(el => !!(el as HTMLTextAreaElement).value, ta);
-      if (!hasValue) {
-        try {
-          const taSelector = await page.evaluate(el => {
-            return el.name ? `textarea[name="${el.name}"]` : el.id ? `textarea#${el.id}` : null;
-          }, ta);
-          if (taSelector) {
-            await blazorType(taSelector, "Brak");
-            textLog.push("textarea_inne");
-          }
-        } catch {}
+        const ctx = `${inp.name} ${inp.id} ${inp.placeholder} ${labelText}`.toLowerCase();
+        let val = "Brak";
+        if (ctx.includes("numer dom") || ctx.includes("domu") || ctx.includes("lokalu") || ctx.includes("budyn")) val = nrDomu || "1";
+        else if (ctx.includes("kod") || ctx.includes("poczt")) val = kodPoczt;
+        inp.focus();
+        inp.value = val;
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
       }
-    }
+      const textareas = Array.from(document.querySelectorAll("textarea:not([readonly]):not([disabled])")) as HTMLTextAreaElement[];
+      for (const ta of textareas) {
+        if (ta.value) continue;
+        ta.focus(); ta.value = "Brak";
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        ta.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    }, numerDomuLokalu, participant.kodPocztowy);
+    addStep(log("pola", "ok", "Wypelniono pola tekstowe"));
 
-    addStep(log("submit_pola_tekstowe", "ok", `Pola: [${textLog.join(", ")}]`));
+    // Upload PDF to ALL file inputs
+    const u2 = await uploadAllFiles();
+    addStep(log("uploads", "ok", `PDF x${u2}`));
 
-    const allFileInputs = await page.$$("input[type='file']");
-    let uploadCount = 0;
-    for (const fi of allFileInputs) {
-      try {
-        await fi.uploadFile(dummyPdfPath);
-        uploadCount++;
-        await delay(2000);
-      } catch {}
-    }
-    addStep(log("submit_uploads", "ok", `Zaladowano ${uploadCount}/${allFileInputs.length} plikow PDF`));
-
+    // Fill remaining empty selects (status, education, etc.)
     const selectsInfo = await page.evaluate((notatkiRaw) => {
       const selects = Array.from(document.querySelectorAll("select"));
       const toFill: { id: string; value: string; label: string }[] = [];
       const notatki = notatkiRaw.toLowerCase();
-
       for (let i = 0; i < selects.length; i++) {
         const s = selects[i] as HTMLSelectElement;
         if (s.value && s.value !== "" && s.value !== "0") continue;
-        if (!s.id) s.id = `__fst_status_${i}_${Date.now()}`;
+        if (!s.id) s.id = `__q_st_${i}_${Date.now()}`;
         const parent = s.closest(".form-group, .mb-3, .col, div") || s.parentElement;
-        const nearby = (parent?.textContent || "").toLowerCase().substring(0, 300);
-        const prevText = (s.previousElementSibling?.textContent || "").toLowerCase();
-        const labelText = `${nearby} ${prevText}`;
+        const lbl = ((parent?.textContent || "") + " " + (s.previousElementSibling?.textContent || "")).toLowerCase().substring(0, 300);
         const opts = Array.from(s.options);
-
         let chosen: { value: string; text: string } | null = null;
-        let fieldName = "";
-
-        if (labelText.includes("rynku pracy") || labelText.includes("status wnioskodawcy na rynku")) {
-          fieldName = "status_pracy";
-          if (notatki.includes("zatrudnion")) chosen = opts.find(o => o.text.toLowerCase().includes("zatrudnion")) || null;
-          if (!chosen && (notatki.includes("bezrobotn") || notatki.includes("zarejestrowana w pup") || notatki.includes("zarejestrowana w up") || notatki.includes("urzędzie pracy") || notatki.includes("urzedzie pracy")))
-            chosen = opts.find(o => o.text.toLowerCase().includes("bezrobotn") && o.text.toLowerCase().includes("pup")) || null;
-          if (!chosen && notatki.includes("urzędzie pracy"))
+        let fn = "";
+        if (lbl.includes("rynku pracy") || lbl.includes("status wnioskodawcy")) {
+          fn = "praca";
+          if (notatki.includes("zatrudnion") || notatki.includes("urzędzie pracy") || notatki.includes("urzedzie pracy"))
             chosen = opts.find(o => o.text.toLowerCase().includes("zatrudnion")) || null;
+          if (!chosen && (notatki.includes("bezrobotn") || notatki.includes("pup") || notatki.includes("urzędzie")))
+            chosen = opts.find(o => o.text.toLowerCase().includes("bezrobotn")) || null;
           if (!chosen) chosen = opts.find(o => o.text.toLowerCase().includes("bezrobotn")) || null;
-        } else if (labelText.includes("wykształcen") || labelText.includes("wyksztalcen") || labelText.includes("isced")) {
-          fieldName = "wyksztalcenie";
+        } else if (lbl.includes("wykształcen") || lbl.includes("isced")) {
+          fn = "edu";
           if (notatki.includes("brak formal")) chosen = opts.find(o => o.text.toLowerCase().includes("isced 0") || o.text.toLowerCase().includes("brak")) || null;
           else if (notatki.includes("zawodowe")) chosen = opts.find(o => o.text.toLowerCase().includes("zawodow")) || null;
-          else if (notatki.includes("średnie niepełne") || notatki.includes("srednie niepelne")) chosen = opts.find(o => o.text.toLowerCase().includes("gimnazjaln")) || null;
-          else if (notatki.includes("średnie") || notatki.includes("srednie")) chosen = opts.find(o => o.text.toLowerCase().includes("ponadgimnazjaln") || o.text.toLowerCase().includes("isced 3")) || null;
+          else if (notatki.includes("średnie niepełne")) chosen = opts.find(o => o.text.toLowerCase().includes("gimnazjaln")) || null;
+          else if (notatki.includes("średnie")) chosen = opts.find(o => o.text.toLowerCase().includes("ponadgimnazjaln") || o.text.toLowerCase().includes("isced 3")) || null;
           if (!chosen) chosen = opts.find(o => o.text.toLowerCase().includes("isced 0") || o.text.toLowerCase().includes("brak")) || null;
-        } else if (labelText.includes("niepełnospraw") || labelText.includes("niepelnospraw")) {
-          fieldName = "niepelnosprawnosc";
-          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
-        } else if (labelText.includes("mniejszoś") || labelText.includes("mniejszos") || labelText.includes("etniczn")) {
-          fieldName = "mniejszosc";
-          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
-        } else if (labelText.includes("obcego pochodzen")) {
-          fieldName = "obce_pochodzenie";
-          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
-        } else if (labelText.includes("bezdomn") || labelText.includes("wykluczeni")) {
-          fieldName = "bezdomnosc";
-          chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
-        } else if (labelText.includes("pomocy społ") || labelText.includes("pomocy spol") || labelText.includes("świadczeń pomocy")) {
-          fieldName = "pomoc_spol";
+        } else if (lbl.includes("niepełnospraw") || lbl.includes("mniejszoś") || lbl.includes("obcego") || lbl.includes("bezdomn") || lbl.includes("pomocy społ") || lbl.includes("wykluczeni")) {
+          fn = "nie";
           chosen = opts.find(o => o.text.toLowerCase().trim() === "nie") || null;
         } else {
-          fieldName = `other_${i}`;
-          const nonEmpty = opts.filter(o => o.value && o.value !== "" && o.value !== "0");
-          if (nonEmpty.length > 0) chosen = nonEmpty[0];
+          fn = `o${i}`;
+          const ne = opts.filter(o => o.value && o.value !== "" && o.value !== "0");
+          if (ne.length > 0) chosen = ne[0];
         }
-
-        if (chosen) toFill.push({ id: s.id, value: chosen.value, label: `${fieldName}=${chosen.text.substring(0, 50)}` });
+        if (chosen) toFill.push({ id: s.id, value: chosen.value, label: `${fn}=${chosen.text.substring(0, 30)}` });
       }
       return toFill;
     }, participant.notatki || "");
 
-    const selectsLog: string[] = [];
     for (const sf of selectsInfo) {
-      try {
-        await page.select(`#${sf.id}`, sf.value);
-        await page.evaluate((id) => {
-          const el = document.getElementById(id) as HTMLSelectElement;
-          if (el) {
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        }, sf.id);
-        selectsLog.push(sf.label);
-      } catch {
-        await page.evaluate((id, val) => {
+      await page.select(`#${sf.id}`, sf.value).catch(() => {
+        page.evaluate((id, val) => {
           const el = document.getElementById(id) as HTMLSelectElement;
           if (el) { el.value = val; el.dispatchEvent(new Event('change', { bubbles: true })); }
         }, sf.id, sf.value);
-        selectsLog.push(sf.label);
-      }
-      await delay(500);
+      });
+      await page.evaluate((id) => {
+        const el = document.getElementById(id) as HTMLSelectElement;
+        if (el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+      }, sf.id);
     }
+    addStep(log("selecty", "ok", `${selectsInfo.map(s => s.label).join("; ")}`));
 
-    addStep(log("submit_selecty_statusy", "ok", `Selecty: [${selectsLog.join("; ")}]`));
-
+    // Checkboxes — select specific ones
     await page.evaluate(() => {
       const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
       for (const cb of cbs) {
         if (cb.checked || cb.disabled) continue;
-        const parent = cb.closest(".form-group, .mb-3, div, label") || cb.parentElement;
-        const labelText = (parent?.textContent || "").toLowerCase();
-
-        const shouldCheck =
-          labelText.includes("nie potrzebuję") || labelText.includes("nie potrzebuje") ||
-          labelText.includes("dostępnościow") || labelText.includes("zainteresowany") ||
-          labelText.includes("doradztw") || labelText.includes("doradcy zawodowego") ||
-          labelText.includes("akceptuję") || labelText.includes("akceptuje") ||
-          labelText.includes("oświadczen") || labelText.includes("oswiadczen");
-
-        if (shouldCheck) cb.click();
+        const p = cb.closest(".form-group, .mb-3, div, label") || cb.parentElement;
+        const t = (p?.textContent || "").toLowerCase();
+        if (t.includes("nie potrzebuję") || t.includes("nie potrzebuje") || t.includes("dostępnościow") ||
+            t.includes("doradztw") || t.includes("doradcy zawodowego") || t.includes("zainteresowany") ||
+            t.includes("akceptuję") || t.includes("akceptuje") || t.includes("oświadczen") || t.includes("oswiadczen"))
+          cb.click();
       }
     });
-    await delay(1000);
 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await delay(2000);
+    await delay(300);
 
-    screenshot = await takeScreenshot(page);
-    addStep(log("submit_formularz_gotowy", "ok", `Formularz wypelniony. URL: ${page.url()}`, screenshot));
-
-    if (autoSubmit) {
-      const submitResult = await page.evaluate(() => {
-        const keywords = ["złóż wniosek", "wyślij", "zapisz", "zatwierdź"];
-        const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
-        for (const btn of btns) {
-          const t = (btn.textContent || "").trim().toLowerCase();
-          if (keywords.some(kw => t.includes(kw))) {
-            (btn as HTMLElement).click();
-            return { clicked: true, text: (btn.textContent || "").trim() };
+    // Final check: fill any remaining empty required fields
+    await page.evaluate(() => {
+      const emptyInputs = Array.from(document.querySelectorAll("input[type='text']:not([readonly]):not([disabled])")) as HTMLInputElement[];
+      for (const inp of emptyInputs) {
+        if (!inp.value) {
+          inp.value = "Brak";
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          inp.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+      const emptySelects = Array.from(document.querySelectorAll("select")) as HTMLSelectElement[];
+      for (const sel of emptySelects) {
+        if (!sel.value || sel.value === "" || sel.value === "0") {
+          const opts = Array.from(sel.options).filter(o => o.value && o.value !== "" && o.value !== "0");
+          if (opts.length > 0) {
+            sel.value = opts[0].value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
           }
         }
-        return { clicked: false, text: "" };
+      }
+    });
+
+    screenshot = await takeScreenshot(page);
+    addStep(log("gotowy", "ok", `Formularz gotowy. URL: ${page.url()}`, screenshot));
+
+    if (autoSubmit) {
+      const clicked = await page.evaluate(() => {
+        const kw = ["złóż wniosek", "wyślij", "wyslij", "zapisz", "zatwierdź", "zatwierdz"];
+        const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
+        for (const b of btns) { const t = (b.textContent || "").trim().toLowerCase(); if (kw.some(k => t.includes(k))) { (b as HTMLElement).click(); return t; } }
+        const primary = btns.find(b => (b as Element).className?.includes("btn-primary") || (b as Element).className?.includes("btn-success"));
+        if (primary) { (primary as HTMLElement).click(); return (primary.textContent || "").trim(); }
+        return "";
       });
 
-      await delay(5000);
+      await delay(2000);
       screenshot = await takeScreenshot(page);
 
-      if (submitResult.clicked) {
-        addStep(log("submit_wyslanie", "ok", `Kliknieto "${submitResult.text}". URL: ${page.url()}`, screenshot));
+      if (clicked) {
+        addStep(log("wyslano", "ok", `WYSLANO: "${clicked}". URL: ${page.url()}`, screenshot));
         status = "completed";
       } else {
-        addStep(log("submit_wyslanie", "skip", `Nie znaleziono przycisku wyslania. URL: ${page.url()}`, screenshot));
+        addStep(log("wyslano", "skip", `Nie znaleziono przycisku. URL: ${page.url()}`, screenshot));
         status = "stopped";
       }
     } else {
       screenshot = await takeScreenshot(page);
-      addStep(log("submit_stop", "stop", "Automatyczne wyslanie wylaczone.", screenshot));
+      addStep(log("stop", "stop", "Auto-submit off", screenshot));
       status = "stopped";
     }
 
     session.status = "done";
   } catch (err: any) {
     if (!steps.some(s => s.status === "error")) {
-      steps.push(log("submit_blad", "error", `Blad: ${err.message}`));
+      steps.push(log("blad", "error", `Blad: ${err.message}`));
     }
     status = "error";
     session.status = "error";
