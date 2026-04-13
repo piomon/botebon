@@ -18,7 +18,7 @@
     "express": "^5",
     "pino": "^9",
     "pino-http": "^10",
-    "puppeteer-core": "24.40.0"
+    "playwright-core": "^1.52.0"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",

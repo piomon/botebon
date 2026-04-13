@@ -6,7 +6,7 @@ import {
   fstPreloginAll, fstSubmitAll, fstCleanupAll, getFstSessionsStatus,
   type AutomationResult, type StepLog, type PortalType
 } from "../automation/browser";
-import puppeteer from "puppeteer-core";
+import { chromium } from "playwright-core";
 import { existsSync } from "fs";
 
 const router: IRouter = Router();
@@ -14,7 +14,8 @@ const router: IRouter = Router();
 router.post("/automation/prewarm", async (_req, res): Promise<void> => {
   const start = Date.now();
   const chromiumPaths = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
+    process.env.CHROMIUM_PATH,
+    "/nix/store/zi4f80l169xlmivz8vja8wkjir5p9bfm-chromium-136.0.7103.113/bin/chromium",
     "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium",
   ].filter(Boolean) as string[];
 
@@ -25,11 +26,10 @@ router.post("/automation/prewarm", async (_req, res): Promise<void> => {
   }
 
   try {
-    const browser = await puppeteer.launch({
-      headless: "shell",
+    const browser = await chromium.launch({
+      headless: true,
       executablePath: chromiumPath,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-      protocolTimeout: 30000,
     });
     const page = await browser.newPage();
     await page.goto("https://projektebon.pl", { waitUntil: "domcontentloaded", timeout: 15000 });
