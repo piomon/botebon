@@ -104,7 +104,7 @@ const SEED_DATA = [
     miasto: "Łódź",
     loginPortal: "balejasandra@gmail.com",
     haslo: "Diana1988@",
-    notatki: "bezrobotna zarejestrowana w UP; wykształcenie średnie; nieprowadząca działalności",
+    notatki: "bezrobotna zarejestrowana w UP; brak formalnego wykształcenia; nieprowadząca działalności",
     portal: "both",
     validationStatus: "ok" as const,
   },
