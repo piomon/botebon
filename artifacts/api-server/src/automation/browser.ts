@@ -89,6 +89,17 @@ async function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function safeEval<T>(page: Page, fn: (...args: any[]) => T, ...args: any[]): Promise<T | null> {
+  try {
+    return await Promise.race([
+      page.evaluate(fn, ...args),
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error("eval_timeout")), 30000)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 async function waitAndClick(page: Page, selector: string, timeout = 15000) {
   await page.waitForSelector(selector, { visible: true, timeout });
   await page.click(selector);
@@ -1817,8 +1828,8 @@ async function ensureSharedBrowser(): Promise<Browser> {
       "--js-flags=--max-old-space-size=256",
       "--window-size=1280,900", "--disable-features=site-per-process",
     ],
-    protocolTimeout: 180000,
-    timeout: 60000,
+    protocolTimeout: 300000,
+    timeout: 90000,
   });
   return fstSharedBrowser;
 }
@@ -1906,7 +1917,7 @@ async function fstPreloginSingle(
     let screenshot = await takeScreenshot(page);
     addStep(log("prelogin_login_ok", "ok", `Zalogowano. URL: ${currentUrl}`, screenshot));
 
-    await page.evaluate(() => {
+    await safeEval(page, () => {
       const links = Array.from(document.querySelectorAll("a"));
       for (const link of links) {
         const text = (link.textContent || "").trim();
@@ -1923,26 +1934,19 @@ async function fstPreloginSingle(
         }
       }
     });
-    await delay(6000);
+    await delay(4000);
 
     for (let waitAttempt = 0; waitAttempt < 5; waitAttempt++) {
-      const hasContent = await page.evaluate(() => {
+      const hasContent = await safeEval(page, () => {
         const body = document.body?.innerText || "";
         return body.includes("Nabór") || body.includes("nabór") || body.includes("Złóż") || body.includes("Wybierz");
       });
       if (hasContent) break;
-      await delay(3000);
+      await delay(2000);
     }
 
-    screenshot = await takeScreenshot(page);
-    const pageInfo = await page.evaluate(() => ({
-      url: window.location.href,
-      text: document.body?.innerText?.substring(0, 500) || "",
-    }));
-
     addStep(log("prelogin_ready", "ok",
-      `Gotowy: ${pageInfo.url}. Tekst: ${pageInfo.text.substring(0, 150)}`,
-      screenshot));
+      `Gotowy na: ${page.url()}`));
 
     session.status = "ready";
     session.readyAt = new Date().toISOString();
@@ -2081,7 +2085,7 @@ export async function fstSubmitParticipant(
         if (homeLink) (homeLink as HTMLElement).click();
       });
       await delay(500);
-      await page.evaluate(() => {
+      await safeEval(page, () => {
         const links = Array.from(document.querySelectorAll("a"));
         for (const link of links) {
           if ((link.textContent || "").trim() === "Złóż wniosek") { (link as HTMLElement).click(); return; }
@@ -2092,13 +2096,13 @@ export async function fstSubmitParticipant(
       });
       await delay(2000);
       for (let w = 0; w < 10; w++) {
-        const ok = await page.evaluate(() => !document.body?.innerText?.includes("Brak aktualnych naborów"));
+        const ok = await safeEval(page, () => !document.body?.innerText?.includes("Brak aktualnych naborów"));
         if (ok) break;
         await delay(1000);
       }
     }
 
-    const afterText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || "");
+    const afterText = await safeEval(page, () => document.body?.innerText?.substring(0, 500) || "") || "";
     if (afterText.includes("Brak aktualnych naborów")) {
       addStep(log("submit_no_nabor", "error", "Brak aktualnych naborow"));
       session.status = "error";
@@ -2106,7 +2110,7 @@ export async function fstSubmitParticipant(
         loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString() };
     }
 
-    await page.evaluate(() => {
+    await safeEval(page, () => {
       const kw = ["złóż wniosek", "kontynuuj", "edytuj wniosek"];
       const els = Array.from(document.querySelectorAll("button, a, td a, td button")).filter(
         b => !(b as Element).closest("nav") && !(b as Element).closest(".navbar") && !b.classList.contains("nav-link")
@@ -2117,7 +2121,7 @@ export async function fstSubmitParticipant(
 
     await delay(1500);
 
-    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || "");
+    const pageText = await safeEval(page, () => document.body?.innerText?.substring(0, 2000) || "") || "";
     if (pageText.toLowerCase().includes("złożono wniosek w projekcie")) {
       addStep(log("juz_zlozony", "ok", "Wniosek juz zlozony"));
       session.status = "done";
@@ -2128,13 +2132,13 @@ export async function fstSubmitParticipant(
     addStep(log("submit_klik", "ok", `Na formularzu. URL: ${page.url()}`));
 
     // ===== STEP 1: Two dropdowns + PDF + "Przejdz dalej" — FAST =====
-    const s1Selects = await page.evaluate(() => {
+    const s1Selects = await safeEval(page, () => {
       const sels = Array.from(document.querySelectorAll("select"));
       return sels.map((s, i) => {
         if (!s.id) s.id = `__q1_${i}_${Date.now()}`;
         return { id: s.id, opts: Array.from((s as HTMLSelectElement).options).filter(o => o.value && o.value !== "" && o.value !== "0").map(o => ({ value: o.value, text: o.text })) };
       });
-    });
+    }) || [];
     for (let i = 0; i < s1Selects.length; i++) {
       const sel = s1Selects[i];
       if (sel.opts.length === 0) continue;
@@ -2148,13 +2152,13 @@ export async function fstSubmitParticipant(
     const u1 = await uploadAllFiles();
     addStep(log("step1", "ok", `Selecty+upload(${u1})`));
 
-    await page.evaluate(() => {
+    await safeEval(page, () => {
       const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
       for (const b of btns) { if ((b.textContent || "").toLowerCase().includes("dalej")) { (b as HTMLElement).click(); return; } }
     });
     await delay(2000);
 
-    const onStep2 = await page.evaluate(() => document.querySelectorAll("select").length >= 3);
+    const onStep2 = await safeEval(page, () => document.querySelectorAll("select").length >= 3);
     if (!onStep2) {
       await delay(2000);
     }
@@ -2179,7 +2183,7 @@ export async function fstSubmitParticipant(
     addStep(log("adres", "ok", `woj:${woj.msg} pow:${pow.msg} gm:${gm.msg} mc:${mc.msg} ul:${ul.msg}`));
 
     // Text fields — fill ALL empty inputs fast
-    await page.evaluate((nrDomu, kodPoczt) => {
+    await safeEval(page, (nrDomu: string, kodPoczt: string) => {
       const inputs = Array.from(document.querySelectorAll("input[type='text']:not([readonly]):not([disabled])")) as HTMLInputElement[];
       for (const inp of inputs) {
         if (inp.value) continue;
@@ -2216,7 +2220,7 @@ export async function fstSubmitParticipant(
     addStep(log("uploads", "ok", `PDF x${u2}`));
 
     // Fill remaining empty selects (status, education, etc.)
-    const selectsInfo = await page.evaluate((notatkiRaw) => {
+    const selectsInfo = await safeEval(page, (notatkiRaw: string) => {
       const selects = Array.from(document.querySelectorAll("select"));
       const toFill: { id: string; value: string; label: string }[] = [];
       const notatki = notatkiRaw.toLowerCase();
@@ -2254,7 +2258,7 @@ export async function fstSubmitParticipant(
         if (chosen) toFill.push({ id: s.id, value: chosen.value, label: `${fn}=${chosen.text.substring(0, 30)}` });
       }
       return toFill;
-    }, participant.notatki || "");
+    }, participant.notatki || "") || [];
 
     for (const sf of selectsInfo) {
       await page.select(`#${sf.id}`, sf.value).catch(() => {
@@ -2270,13 +2274,18 @@ export async function fstSubmitParticipant(
     }
     addStep(log("selecty", "ok", `${selectsInfo.map(s => s.label).join("; ")}`));
 
-    // Checkboxes — select specific ones
-    await page.evaluate(() => {
+    // Checkboxes — select ONLY specific ones, NEVER "państwa trzeciego"
+    await safeEval(page, () => {
       const cbs = Array.from(document.querySelectorAll("input[type='checkbox']")) as HTMLInputElement[];
       for (const cb of cbs) {
         if (cb.checked || cb.disabled) continue;
         const p = cb.closest(".form-group, .mb-3, div, label") || cb.parentElement;
         const t = (p?.textContent || "").toLowerCase();
+        if (t.includes("państwa trzeciego") || t.includes("panstwa trzeciego") ||
+            t.includes("pętla indukcyj") || t.includes("petla indukcyj") ||
+            t.includes("tłumacz") || t.includes("tlumacz") ||
+            t.includes("wsparcie asystent"))
+          continue;
         if (t.includes("nie potrzebuję") || t.includes("nie potrzebuje") || t.includes("dostępnościow") ||
             t.includes("doradztw") || t.includes("doradcy zawodowego") || t.includes("zainteresowany") ||
             t.includes("akceptuję") || t.includes("akceptuje") || t.includes("oświadczen") || t.includes("oswiadczen"))
@@ -2284,11 +2293,11 @@ export async function fstSubmitParticipant(
       }
     });
 
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await delay(300);
+    await safeEval(page, () => window.scrollTo(0, document.body.scrollHeight));
+    await delay(200);
 
     // Final check: fill any remaining empty required fields
-    await page.evaluate(() => {
+    await safeEval(page, () => {
       const emptyInputs = Array.from(document.querySelectorAll("input[type='text']:not([readonly]):not([disabled])")) as HTMLInputElement[];
       for (const inp of emptyInputs) {
         if (!inp.value) {
@@ -2309,15 +2318,17 @@ export async function fstSubmitParticipant(
       }
     });
 
-    screenshot = await takeScreenshot(page);
-    addStep(log("gotowy", "ok", `Formularz gotowy. URL: ${page.url()}`, screenshot));
+    // Upload PDF one more time to catch any new file inputs that appeared
+    await uploadAllFiles();
+
+    addStep(log("gotowy", "ok", `Formularz gotowy. URL: ${page.url()}`));
 
     if (autoSubmit) {
-      const clicked = await page.evaluate(() => {
-        const kw = ["złóż wniosek", "wyślij", "wyslij", "zapisz", "zatwierdź", "zatwierdz"];
+      const clicked = await safeEval(page, () => {
+        const kw = ["wyślij wniosek", "wyslij wniosek", "złóż wniosek", "zloz wniosek", "wyślij", "wyslij", "zapisz", "zatwierdź", "zatwierdz"];
         const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
         for (const b of btns) { const t = (b.textContent || "").trim().toLowerCase(); if (kw.some(k => t.includes(k))) { (b as HTMLElement).click(); return t; } }
-        const primary = btns.find(b => (b as Element).className?.includes("btn-primary") || (b as Element).className?.includes("btn-success"));
+        const primary = btns.find(b => (b as Element).className?.includes("btn-primary") || (b as Element).className?.includes("btn-success") || (b as Element).className?.includes("btn-danger"));
         if (primary) { (primary as HTMLElement).click(); return (primary.textContent || "").trim(); }
         return "";
       });
