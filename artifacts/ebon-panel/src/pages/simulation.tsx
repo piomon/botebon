@@ -25,10 +25,11 @@ interface AutomationResult {
   imie: string;
   nazwisko: string;
   loginPortal: string;
-  status: "completed" | "error" | "stopped";
+  status: "completed" | "error" | "stopped" | "waiting";
   steps: StepLog[];
   startedAt: string;
   finishedAt: string;
+  errorSummary?: string;
 }
 
 interface FstSessionInfo {
@@ -59,6 +60,7 @@ const FST_NABOR = {
 function StatusBadge({ status }: { status: string }) {
   if (status === "ok" || status === "completed") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3" /> OK</span>;
   if (status === "error") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800"><XCircle className="h-3 w-3" /> Blad</span>;
+  if (status === "waiting") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800"><Clock className="h-3 w-3" /> Nabor zamkniety</span>;
   if (status === "skip") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle className="h-3 w-3" /> Pominieto</span>;
   if (status === "stop" || status === "stopped") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800"><StopCircle className="h-3 w-3" /> STOP</span>;
   if (status === "ready") return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3" /> Gotowy</span>;
@@ -690,7 +692,19 @@ export default function Simulation() {
                   Czas: {new Date(dryRunResult.startedAt).toLocaleString('pl-PL')} — {new Date(dryRunResult.finishedAt).toLocaleString('pl-PL')}
                 </div>
               </CardHeader>
-              <CardContent className="pt-4">
+              <CardContent className="pt-4 space-y-3">
+                {dryRunResult.errorSummary && (
+                  <div className={`rounded-lg p-3 text-sm font-medium ${dryRunResult.status === "waiting" ? "bg-amber-50 text-amber-900 border border-amber-200" : "bg-red-50 text-red-900 border border-red-200"}`}>
+                    {dryRunResult.status === "waiting" ? <Clock className="h-4 w-4 inline mr-2" /> : <XCircle className="h-4 w-4 inline mr-2" />}
+                    {dryRunResult.errorSummary}
+                  </div>
+                )}
+                {dryRunResult.status === "error" && !dryRunResult.errorSummary && (
+                  <div className="rounded-lg p-3 text-sm font-medium bg-red-50 text-red-900 border border-red-200">
+                    <XCircle className="h-4 w-4 inline mr-2" />
+                    {dryRunResult.steps.filter(s => s.status === "error").pop()?.message || "Wystapil nieznany blad"}
+                  </div>
+                )}
                 {renderSteps(dryRunResult.steps, `dryrun-${dryRunResult.participantId}`)}
               </CardContent>
             </Card>
@@ -723,7 +737,19 @@ export default function Simulation() {
               Koniec: {new Date(singleResult.finishedAt).toLocaleString('pl-PL')}
             </div>
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent className="pt-4 space-y-3">
+            {singleResult.errorSummary && (
+              <div className={`rounded-lg p-3 text-sm font-medium ${singleResult.status === "waiting" ? "bg-amber-50 text-amber-900 border border-amber-200" : "bg-red-50 text-red-900 border border-red-200"}`}>
+                {singleResult.status === "waiting" ? <Clock className="h-4 w-4 inline mr-2" /> : <XCircle className="h-4 w-4 inline mr-2" />}
+                {singleResult.errorSummary}
+              </div>
+            )}
+            {singleResult.status === "error" && !singleResult.errorSummary && (
+              <div className="rounded-lg p-3 text-sm font-medium bg-red-50 text-red-900 border border-red-200">
+                <XCircle className="h-4 w-4 inline mr-2" />
+                {singleResult.steps.filter(s => s.status === "error").pop()?.message || "Wystapil nieznany blad"}
+              </div>
+            )}
             {renderSteps(singleResult.steps, `single-${singleResult.participantId}`)}
           </CardContent>
         </Card>
@@ -752,7 +778,19 @@ export default function Simulation() {
                   <span className="font-medium text-sm">{r.imie} {r.nazwisko}</span>
                   <StatusBadge status={r.status} />
                 </div>
-                <div className="p-4">
+                <div className="p-4 space-y-3">
+                  {r.errorSummary && (
+                    <div className={`rounded-lg p-3 text-sm font-medium ${r.status === "waiting" ? "bg-amber-50 text-amber-900 border border-amber-200" : "bg-red-50 text-red-900 border border-red-200"}`}>
+                      {r.status === "waiting" ? <Clock className="h-4 w-4 inline mr-2" /> : <XCircle className="h-4 w-4 inline mr-2" />}
+                      {r.errorSummary}
+                    </div>
+                  )}
+                  {r.status === "error" && !r.errorSummary && (
+                    <div className="rounded-lg p-3 text-sm font-medium bg-red-50 text-red-900 border border-red-200">
+                      <XCircle className="h-4 w-4 inline mr-2" />
+                      {r.steps.filter(s => s.status === "error").pop()?.message || "Wystapil nieznany blad"}
+                    </div>
+                  )}
                   {renderSteps(r.steps, `all-${r.participantId}`)}
                 </div>
               </div>

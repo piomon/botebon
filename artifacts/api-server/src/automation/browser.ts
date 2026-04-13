@@ -70,10 +70,11 @@ export interface AutomationResult {
   imie: string;
   nazwisko: string;
   loginPortal: string;
-  status: "completed" | "error" | "stopped";
+  status: "completed" | "error" | "stopped" | "waiting";
   steps: StepLog[];
   startedAt: string;
   finishedAt: string;
+  errorSummary?: string;
 }
 
 type ProgressCallback = (participantId: number, step: StepLog) => void;
@@ -266,9 +267,9 @@ export async function runAutomationForParticipant(
 
     if (!loginField) {
       screenshot = await takeScreenshot(page);
-      addStep(log("logowanie", "error", "Nie znaleziono pola logowania na stronie", screenshot));
+      addStep(log("logowanie", "error", `BLAD LOGOWANIA: Nie znaleziono pola email/login na stronie ${page.url()}. Mozliwe przyczyny: strona sie nie zaladowala, zmienil sie layout portalu, lub portal jest chwilowo niedostepny.`, screenshot));
       status = "error";
-      return { participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko, loginPortal: participant.loginPortal, status, steps, startedAt, finishedAt: new Date().toISOString() };
+      return { participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko, loginPortal: participant.loginPortal, status, steps, startedAt, finishedAt: new Date().toISOString(), errorSummary: "Nie znaleziono pola logowania — portal moze byc niedostepny" };
     }
 
     await page.fill(loginField, participant.loginPortal);
@@ -465,7 +466,7 @@ export async function runAutomationForParticipant(
         addStep(log("formularz_otwarcie", "ok", `Kliknieto: "${applyResult.text}". Strona: ${page.url()}`));
       } else {
         screenshot = await takeScreenshot(page);
-        addStep(log("formularz_otwarcie", "skip", `Nie znaleziono przycisku zlozenia wniosku na stronie naboru. Strona: ${page.url()}`, screenshot));
+        addStep(log("formularz_otwarcie", "skip", `Nie znaleziono przycisku "Zloz wniosek" na stronie naboru. Nabor moze nie byc jeszcze otwarty lub uczestnik juz zlozyl wniosek. URL: ${page.url()}`, screenshot));
       }
     } else {
       addStep(log("formularz_otwarcie", "skip", "Pominieto — NABOR 9 nie jest jeszcze dostepny"));
@@ -867,7 +868,7 @@ export async function runAutomationForParticipant(
       status = "stopped";
     }
   } catch (err: any) {
-    steps.push(log("blad_krytyczny", "error", `Blad: ${err.message}`));
+    steps.push(log("blad_krytyczny", "error", `BLAD KRYTYCZNY (EBON): ${err.message}. Ostatni OK krok: "${steps.filter(s => s.status === 'ok').pop()?.step || 'brak'}". Sprawdz screenshoty.`));
     status = "error";
   } finally {
     if (browser) {
@@ -1116,9 +1117,9 @@ export async function runFstAutomationForParticipant(
         const alerts = document.querySelectorAll(".alert, .text-danger, .validation-message, .validation-summary-errors");
         return Array.from(alerts).map(a => a.textContent?.trim()).filter(t => t).join("; ");
       });
-      addStep(log("logowanie_submit", "error", `Logowanie nieudane. URL: ${currentUrl}. Bledy: ${errorMsg || "brak"}`, screenshot));
+      addStep(log("logowanie_submit", "error", `BLAD LOGOWANIA FST: Strona nadal na ${currentUrl} po probie logowania. ${errorMsg ? `Portal pokazuje: "${errorMsg}"` : "Brak komunikatu bledu na stronie — portal moze byc przeciazony lub dane logowania nieprawidlowe."}`, screenshot));
       status = "error";
-      throw new Error(`Logowanie nieudane: ${errorMsg || "brak bledu na stronie"}`);
+      throw new Error(`Logowanie nieudane: ${errorMsg || "portal nie przekierowal po logowaniu"}`);
     }
 
     addStep(log("logowanie_submit", "ok", `Zalogowano. URL: ${currentUrl}`, screenshot));
@@ -1272,7 +1273,7 @@ export async function runFstAutomationForParticipant(
           `Kliknieto "${przejdzResult.text}". URL: ${page.url()}`, screenshot));
       } else {
         screenshot = await takeScreenshot(page);
-        addStep(log("przejdz_dalej", "error", `Nie znaleziono "Przejdz dalej". URL: ${page.url()}`, screenshot));
+        addStep(log("przejdz_dalej", "error", `BLAD FORMULARZA: Nie znaleziono przycisku "Przejdz dalej" na kroku 1. Mozliwe przyczyny: selecty nie zostaly poprawnie wybrane, brakuje uploadu PDF, lub zmienil sie layout formularza. URL: ${page.url()}`, screenshot));
         status = "error";
         throw new Error("Brak przycisku Przejdz dalej");
       }
@@ -1581,7 +1582,7 @@ export async function runFstAutomationForParticipant(
 
   } catch (err: any) {
     if (!steps.some(s => s.status === "error")) {
-      steps.push(log("blad_krytyczny", "error", `Blad: ${err.message}`));
+      steps.push(log("blad_krytyczny", "error", `BLAD KRYTYCZNY (FST stary): ${err.message}. Ostatni OK krok: "${steps.filter(s => s.status === 'ok').pop()?.step || 'brak'}". Sprawdz screenshoty.`));
     }
     status = "error";
   } finally {
@@ -1775,7 +1776,7 @@ async function fstPreloginSingle(
     return { success: true, steps };
 
   } catch (err: any) {
-    addStep(log("prelogin_error", "error", `Blad: ${err.message}`));
+    addStep(log("prelogin_error", "error", `BLAD PRELOGINU: ${err.message}. Sprawdz screenshot powyzej — moze portal FST jest niedostepny, dane logowania sa bledne, lub wystapil timeout.`));
     const session = fstSessions.get(participant.id);
     if (session) {
       session.status = "error";
@@ -1824,7 +1825,8 @@ export async function fstSubmitParticipant(
       nazwisko: participant.nazwisko,
       loginPortal: participant.loginPortal,
       status: "error",
-      steps: [log("submit_error", "error", `Brak gotowej sesji (status: ${session?.status || "nie istnieje"})`)],
+      steps: [log("submit_error", "error", `BLAD SESJI: Uczestnik ${participant.imie} ${participant.nazwisko} nie ma gotowej sesji przegladarki (aktualny status: ${session?.status || "nie istnieje"}). Najpierw uruchom prelogin aby zalogowac uczestnika.`)],
+      errorSummary: `Brak gotowej sesji — uruchom najpierw prelogin dla ${participant.imie} ${participant.nazwisko}`,
       startedAt,
       finishedAt: new Date().toISOString(),
     };
@@ -1927,10 +1929,10 @@ export async function fstSubmitParticipant(
 
     const afterText = await safeEval(page, () => document.body?.innerText?.substring(0, 500) || "") || "";
     if (afterText.includes("Brak aktualnych naborów")) {
-      addStep(log("submit_no_nabor", "error", "Brak aktualnych naborow — formularz niedostepny. Bot zalogowany poprawnie, czeka na otwarcie naboru.", await takeScreenshot(page, true)));
-      session.status = "error";
+      addStep(log("submit_no_nabor", "skip", "NABOR ZAMKNIETY — na stronie widnieje 'Brak aktualnych naborow'. To nie jest blad bota — formularz nie jest jeszcze dostepny. Nabor powinien otworzyc sie o 9:00.", await takeScreenshot(page, true)));
+      session.status = "ready";
       return { participantId: participant.id, imie: participant.imie, nazwisko: participant.nazwisko,
-        loginPortal: participant.loginPortal, status: "error", steps, startedAt, finishedAt: new Date().toISOString() };
+        loginPortal: participant.loginPortal, status: "waiting", errorSummary: "Nabor zamkniety — formularz pojawi sie o 9:00. Bot zalogowany i gotowy.", steps, startedAt, finishedAt: new Date().toISOString() };
     }
 
     const zlozSel = await safeEval(page, () => {
@@ -2267,8 +2269,13 @@ export async function fstSubmitParticipant(
             const errs = document.querySelectorAll(".validation-message, .text-danger, .field-validation-error, .alert-danger");
             return Array.from(errs).map(e => e.textContent?.trim()).filter(t => t).join("; ");
           }) || "";
-          addStep(log("wyslano", "ok", `Kliknieto submit. Bledy: ${validationErrors || "brak"}. URL: ${finalUrl}`, screenshot));
-          status = validationErrors ? "error" : "completed";
+          if (validationErrors) {
+            addStep(log("wyslano", "error", `BLAD WALIDACJI po kliknieciu "Zloz wniosek": Portal odrzucil formularz. Bledy walidacji: "${validationErrors}". URL: ${finalUrl}`, screenshot));
+            status = "error";
+          } else {
+            addStep(log("wyslano", "ok", `Kliknieto submit — strona nie pokazala potwierdzenia ale tez brak bledow. URL: ${finalUrl}`, screenshot));
+            status = "completed";
+          }
         }
       } else {
         screenshot = await takeScreenshot(page);
@@ -2284,7 +2291,7 @@ export async function fstSubmitParticipant(
     session.status = "done";
   } catch (err: any) {
     if (!steps.some(s => s.status === "error")) {
-      steps.push(log("blad", "error", `Blad: ${err.message}`));
+      steps.push(log("blad", "error", `BLAD KRYTYCZNY (FST submit): ${err.message}. Ostatni OK krok: "${steps.filter(s => s.status === 'ok').pop()?.step || 'brak'}". Sprawdz screenshoty aby zidentyfikowac co poszlo nie tak.`));
     }
     status = "error";
     session.status = "error";
@@ -2323,8 +2330,9 @@ export async function fstSubmitAll(
         results[idx] = {
           participantId: p.id, imie: p.imie, nazwisko: p.nazwisko, loginPortal: p.loginPortal,
           status: "error",
-          steps: [{ step: "blad_krytyczny", status: "error", message: `Blad: ${err.message}`, timestamp: new Date().toISOString() }],
+          steps: [{ step: "blad_krytyczny", status: "error", message: `BLAD KRYTYCZNY: ${err.message}. Bot nie mogl przetworzyc uczestnika ${p.imie} ${p.nazwisko}. Sprawdz czy portal FST jest dostepny i czy sesja nie wygasla.`, timestamp: new Date().toISOString() }],
           startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+          errorSummary: err.message,
         };
       }
     }
@@ -2408,9 +2416,10 @@ export async function runAutomationForAll(
           nazwisko: p.nazwisko,
           loginPortal: p.loginPortal,
           status: "error",
-          steps: [{ step: "blad_krytyczny", status: "error", message: `Blad: ${err.message}`, timestamp: new Date().toISOString() }],
+          steps: [{ step: "blad_krytyczny", status: "error", message: `BLAD KRYTYCZNY: ${err.message}. Bot nie mogl przetworzyc uczestnika ${p.imie} ${p.nazwisko}. Sprawdz czy portal FST jest dostepny.`, timestamp: new Date().toISOString() }],
           startedAt: new Date().toISOString(),
           finishedAt: new Date().toISOString(),
+          errorSummary: err.message,
         };
       }
     }
