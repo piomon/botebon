@@ -314,13 +314,55 @@ router.post("/automation/fst-submit", async (req, res): Promise<void> => {
   })();
 });
 
-router.get("/automation/fst-submit-status", async (_req, res): Promise<void> => {
+router.get("/automation/fst-submit-status", async (req, res): Promise<void> => {
   const job = getFstSubmitJobStatus();
   if (!job) {
     res.json({ status: "idle", message: "Brak aktywnego submitu" });
     return;
   }
-  res.json(job);
+  const includeScreenshots = req.query.screenshots === "1";
+  const stripScreenshot = (step: any) => {
+    const { screenshot, ...rest } = step;
+    return { ...rest, hasScreenshot: !!screenshot };
+  };
+  const lite = {
+    ...job,
+    results: (job.results || []).map((r: any) => ({
+      ...r,
+      steps: (r.steps || []).map((s: any) => includeScreenshots ? s : stripScreenshot(s)),
+    })),
+    progress: Object.fromEntries(
+      Object.entries(job.progress || {}).map(([k, steps]) => [
+        k,
+        (steps as any[]).map((s: any) => includeScreenshots ? s : stripScreenshot(s)),
+      ])
+    ),
+  };
+  res.json(lite);
+});
+
+router.get("/automation/fst-submit-screenshot/:participantId/:stepIndex", async (req, res): Promise<void> => {
+  const job = getFstSubmitJobStatus();
+  if (!job) { res.status(404).json({ error: "Brak joba" }); return; }
+  const pid = parseInt(req.params.participantId);
+  const si = parseInt(req.params.stepIndex);
+  const result = (job.results || []).find((r: any) => r.participantId === pid);
+  if (result) {
+    const step = (result.steps || [])[si];
+    if (step?.screenshot) {
+      res.json({ screenshot: step.screenshot });
+      return;
+    }
+  }
+  const progressSteps = (job.progress || {})[pid];
+  if (progressSteps) {
+    const step = (progressSteps as any[])[si];
+    if (step?.screenshot) {
+      res.json({ screenshot: step.screenshot });
+      return;
+    }
+  }
+  res.status(404).json({ error: "Brak screenshota" });
 });
 
 router.post("/automation/fst-cleanup", async (_req, res): Promise<void> => {

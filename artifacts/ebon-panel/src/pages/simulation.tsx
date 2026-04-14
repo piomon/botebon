@@ -18,6 +18,8 @@ interface StepLog {
   message: string;
   timestamp: string;
   screenshotBase64?: string;
+  screenshot?: string;
+  hasScreenshot?: boolean;
 }
 
 interface AutomationResult {
@@ -326,10 +328,25 @@ export default function Simulation() {
     setExpandedScreenshots(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const renderSteps = (steps: StepLog[], keyPrefix: string) => (
+  const [lazyScreenshots, setLazyScreenshots] = useState<Record<string, string>>({});
+
+  const loadSubmitScreenshot = async (participantId: number, stepIndex: number, key: string) => {
+    if (lazyScreenshots[key]) return;
+    try {
+      const res = await fetch(`${API_BASE}/automation/fst-submit-screenshot/${participantId}/${stepIndex}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.screenshot) setLazyScreenshots(prev => ({ ...prev, [key]: data.screenshot }));
+      }
+    } catch {}
+  };
+
+  const renderSteps = (steps: StepLog[], keyPrefix: string, participantId?: number) => (
     <div className="space-y-2">
       {steps.map((step, idx) => {
         const screenshotKey = `${keyPrefix}-${idx}`;
+        const hasScreenshot = step.screenshotBase64 || step.screenshot || (step as any).hasScreenshot;
+        const screenshotData = step.screenshotBase64 || step.screenshot || lazyScreenshots[screenshotKey];
         return (
           <div key={idx} className="border rounded-lg overflow-hidden">
             <div className="flex items-start gap-3 p-3 bg-muted/10">
@@ -347,9 +364,14 @@ export default function Simulation() {
                 <div className="text-xs text-muted-foreground break-all">{step.message}</div>
                 <div className="text-xs text-muted-foreground/60 mt-1">{new Date(step.timestamp).toLocaleString('pl-PL')}</div>
               </div>
-              {step.screenshotBase64 && (
+              {hasScreenshot && (
                 <button
-                  onClick={() => toggleScreenshot(screenshotKey)}
+                  onClick={() => {
+                    toggleScreenshot(screenshotKey);
+                    if (!screenshotData && participantId !== undefined) {
+                      loadSubmitScreenshot(participantId, idx, screenshotKey);
+                    }
+                  }}
                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground border rounded px-2 py-1"
                 >
                   <ImageIcon className="h-3 w-3" />
@@ -357,13 +379,20 @@ export default function Simulation() {
                 </button>
               )}
             </div>
-            {step.screenshotBase64 && expandedScreenshots[screenshotKey] && (
+            {hasScreenshot && expandedScreenshots[screenshotKey] && (
               <div className="border-t p-2 bg-black/5">
-                <img
-                  src={`data:image/jpeg;base64,${step.screenshotBase64}`}
-                  alt={`Zrzut ekranu: ${step.step}`}
-                  className="w-full rounded border shadow-sm"
-                />
+                {screenshotData ? (
+                  <img
+                    src={`data:image/jpeg;base64,${screenshotData}`}
+                    alt={`Zrzut ekranu: ${step.step}`}
+                    className="w-full rounded border shadow-sm"
+                  />
+                ) : (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    <span className="ml-2 text-sm text-muted-foreground">Ladowanie screenshota...</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -711,7 +740,7 @@ export default function Simulation() {
                           {r.steps.filter(s => s.status === "error").pop()?.message || "Wystapil nieznany blad"}
                         </div>
                       )}
-                      {renderSteps(r.steps, `submit-${r.participantId}`)}
+                      {renderSteps(r.steps, `submit-${r.participantId}`, r.participantId)}
                     </div>
                   </div>
                 ))}
