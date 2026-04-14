@@ -2052,6 +2052,9 @@ export async function fstSubmitParticipant(
     const adresMatch = participant.adres.match(/^ul\.?\s*(.+?)\s+(\d+.*)$/i);
     const ulicaName = adresMatch ? adresMatch[1] : participant.adres.replace(/^ul\.?\s*/i, "");
     const numerDomuLokalu = adresMatch ? adresMatch[2] : "";
+    const numerParts = numerDomuLokalu.split("/");
+    const nrDomu = numerParts[0] || "1";
+    const nrLokalu = numerParts[1] || "";
 
     const woj = await blazorSelectFast(0, "łódzkie", 1500);
     const powSearch = participant.miasto.toLowerCase() === "łódź" ? "łódź" : participant.miasto;
@@ -2066,39 +2069,49 @@ export async function fstSubmitParticipant(
     addStep(log("adres", "ok", `woj:${woj.msg} pow:${pow.msg} gm:${gm.msg} mc:${mc.msg} ul:${ul.msg}`, await takeScreenshot(page)));
 
     const emptyTextFields = await page.evaluate((args: any) => {
-      const { nrDomu, kodPoczt } = args;
-      const result: { selector: string; value: string }[] = [];
-      const inputs = Array.from(document.querySelectorAll("input[type='text']:not([readonly]):not([disabled])")) as HTMLInputElement[];
+      const { nrDomu, nrLokalu, kodPoczt } = args;
+      const result: { selector: string; value: string; field: string }[] = [];
+      const inputs = Array.from(document.querySelectorAll("input:not([type='checkbox']):not([type='radio']):not([type='hidden']):not([type='file']):not([type='submit']):not([type='button']):not([readonly]):not([disabled])")) as HTMLInputElement[];
       for (let idx = 0; idx < inputs.length; idx++) {
         const inp = inputs[idx];
         if (inp.value) continue;
         if (!inp.id) inp.id = `__fst_txt_${idx}_${Date.now()}`;
         let parent = inp.parentElement;
         let labelText = "";
-        for (let i = 0; i < 3 && parent; i++) {
-          const l = parent.querySelector("label, strong, b");
+        for (let i = 0; i < 4 && parent; i++) {
+          const l = parent.querySelector("label, strong, b, span.form-label, .col-form-label");
           if (l) labelText += " " + (l.textContent || "");
           parent = parent.parentElement;
         }
         const ctx = `${inp.name} ${inp.id} ${inp.placeholder} ${labelText}`.toLowerCase();
         let val = "Brak";
-        if (ctx.includes("numer dom") || ctx.includes("domu") || ctx.includes("lokalu") || ctx.includes("budyn")) val = nrDomu || "1";
-        else if (ctx.includes("kod") || ctx.includes("poczt")) val = kodPoczt;
-        result.push({ selector: `#${inp.id}`, value: val });
+        let field = "inne";
+        if (ctx.includes("nr lokalu") || ctx.includes("numer lokalu") || ctx.includes("nr mieszk") || ctx.includes("numer mieszk") || ctx.includes("lokal")) {
+          val = nrLokalu || "-";
+          field = "nr_lokalu";
+        } else if (ctx.includes("numer dom") || ctx.includes("domu") || ctx.includes("nr dom") || ctx.includes("budyn") || ctx.includes("nr budyn")) {
+          val = nrDomu || "1";
+          field = "nr_domu";
+        } else if (ctx.includes("kod") && ctx.includes("poczt") || ctx.includes("kod poczt") || ctx.includes("zip") || ctx.includes("postal")) {
+          val = kodPoczt;
+          field = "kod_pocztowy";
+        }
+        result.push({ selector: `#${inp.id}`, value: val, field });
       }
       const textareas = Array.from(document.querySelectorAll("textarea:not([readonly]):not([disabled])")) as HTMLTextAreaElement[];
       for (let idx = 0; idx < textareas.length; idx++) {
         const ta = textareas[idx];
         if (ta.value) continue;
         if (!ta.id) ta.id = `__fst_ta_${idx}_${Date.now()}`;
-        result.push({ selector: `#${ta.id}`, value: "Brak" });
+        result.push({ selector: `#${ta.id}`, value: "Brak", field: "textarea" });
       }
       return result;
-    }, { nrDomu: numerDomuLokalu, kodPoczt: participant.kodPocztowy });
+    }, { nrDomu, nrLokalu, kodPoczt: participant.kodPocztowy });
+    const filledFields: string[] = [];
     for (const field of emptyTextFields) {
-      try { await blazorFill(page, field.selector, field.value); } catch {}
+      try { await blazorFill(page, field.selector, field.value); filledFields.push(`${field.field}=${field.value}`); } catch {}
     }
-    addStep(log("pola", "ok", `Wypelniono ${emptyTextFields.length} pol tekstowych`, await takeScreenshot(page)));
+    addStep(log("pola", "ok", `Wypelniono ${emptyTextFields.length} pol: ${filledFields.join(", ")}`, await takeScreenshot(page)));
 
     const u2 = await uploadAllFiles();
     addStep(log("uploads", "ok", `PDF x${u2}`, await takeScreenshot(page)));
@@ -2182,14 +2195,27 @@ export async function fstSubmitParticipant(
     await safeEval(page, () => window.scrollTo(0, document.body.scrollHeight));
     await delay(200);
 
-    const remainingEmpty = await page.evaluate(() => {
+    const remainingEmpty = await page.evaluate((args: any) => {
+      const { nrDomu, nrLokalu, kodPoczt } = args;
       const result: { type: string; selector: string; value?: string }[] = [];
-      const emptyInputs = Array.from(document.querySelectorAll("input[type='text']:not([readonly]):not([disabled])")) as HTMLInputElement[];
+      const emptyInputs = Array.from(document.querySelectorAll("input:not([type='checkbox']):not([type='radio']):not([type='hidden']):not([type='file']):not([type='submit']):not([type='button']):not([readonly]):not([disabled])")) as HTMLInputElement[];
       for (let i = 0; i < emptyInputs.length; i++) {
         const inp = emptyInputs[i];
         if (!inp.value) {
           if (!inp.id) inp.id = `__fst_rem_${i}_${Date.now()}`;
-          result.push({ type: "input", selector: `#${inp.id}` });
+          let parent = inp.parentElement;
+          let labelText = "";
+          for (let j = 0; j < 4 && parent; j++) {
+            const l = parent.querySelector("label, strong, b, span");
+            if (l) labelText += " " + (l.textContent || "");
+            parent = parent.parentElement;
+          }
+          const ctx = `${inp.name} ${inp.id} ${inp.placeholder} ${labelText}`.toLowerCase();
+          let val = "Brak";
+          if (ctx.includes("nr lokalu") || ctx.includes("numer lokalu") || ctx.includes("lokal")) val = nrLokalu || "-";
+          else if (ctx.includes("numer dom") || ctx.includes("domu") || ctx.includes("budyn")) val = nrDomu || "1";
+          else if (ctx.includes("kod") && ctx.includes("poczt")) val = kodPoczt;
+          result.push({ type: "input", selector: `#${inp.id}`, value: val });
         }
       }
       const emptySelects = Array.from(document.querySelectorAll("select")) as HTMLSelectElement[];
@@ -2204,11 +2230,11 @@ export async function fstSubmitParticipant(
         }
       }
       return result;
-    });
+    }, { nrDomu, nrLokalu, kodPoczt: participant.kodPocztowy });
     for (const item of remainingEmpty) {
       try {
         if (item.type === "input") {
-          await blazorFill(page, item.selector, "Brak");
+          await blazorFill(page, item.selector, item.value || "Brak");
         } else if (item.type === "select" && item.value) {
           await page.selectOption(item.selector, item.value);
         }
@@ -2262,14 +2288,21 @@ export async function fstSubmitParticipant(
     if (autoSubmit) {
       const submitBtnSelector = await safeEval(page, () => {
         const kw = ["złóż wniosek", "zloz wniosek", "wyślij wniosek", "wyslij wniosek", "wyślij", "wyslij", "zapisz", "zatwierdź", "zatwierdz"];
-        const btns = Array.from(document.querySelectorAll("button, input[type='submit']"));
-        for (const b of btns) {
+        const allEls = Array.from(document.querySelectorAll("button, input[type='submit'], a.btn, a[role='button'], a.btn-primary, a.btn-success, a.btn-danger"));
+        for (const b of allEls) {
           const t = (b.textContent || "").trim().toLowerCase();
           if (kw.some(k => t.includes(k))) {
             if (!b.id) (b as HTMLElement).id = `__fst_submit_${Date.now()}`;
             return `#${b.id}`;
           }
         }
+        const primaryBtns = Array.from(document.querySelectorAll("button.btn-primary, button.btn-success, button.btn-danger, a.btn-primary, a.btn-success, a.btn-danger, input[type='submit']"));
+        if (primaryBtns.length > 0) {
+          const btn = primaryBtns[primaryBtns.length - 1];
+          if (!btn.id) (btn as HTMLElement).id = `__fst_submit_${Date.now()}`;
+          return `#${btn.id}`;
+        }
+        const btns = Array.from(document.querySelectorAll("button"));
         const primary = btns.find(b => (b as Element).className?.includes("btn-primary") || (b as Element).className?.includes("btn-success") || (b as Element).className?.includes("btn-danger"));
         if (primary) {
           if (!primary.id) (primary as HTMLElement).id = `__fst_submit_${Date.now()}`;
@@ -2279,8 +2312,11 @@ export async function fstSubmitParticipant(
       });
 
       if (submitBtnSelector) {
+        const btnText = await safeEval(page, (sel: string) => document.querySelector(sel)?.textContent?.trim() || "", submitBtnSelector) || "";
+        addStep(log("klik_submit", "ok", `Klikam submit: "${btnText}" (${submitBtnSelector})`, await takeScreenshot(page)));
+        page.once('dialog', async (dialog) => { try { await dialog.accept(); } catch {} });
         await page.locator(submitBtnSelector).click();
-        await delay(3000);
+        await delay(4000);
         screenshot = await takeScreenshot(page);
         const afterText = await safeEval(page, () => document.body?.innerText?.substring(0, 500) || "") || "";
         const finalUrl = page.url();
